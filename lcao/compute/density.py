@@ -1,5 +1,6 @@
 import numpy as np
 
+from lcao.compute.kernels import build_mesh_positions
 from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
@@ -184,26 +185,23 @@ def electron_density(projector, cell, mesh):
     rho = np.zeros((nspin, na, nb, nc), dtype=float)
     supercell_vectors = projector._supercell_vector_list
 
-    for ix in range(na):
-        for iy in range(nb):
-            for iz in range(nc):
-                position_vector = np.array(
-                    [
-                        xgrid[0][ix][iy][iz],
-                        ygrid[0][ix][iy][iz],
-                        zgrid[0][ix][iy][iz],
-                    ],
-                    dtype=float,
-                )
+    positions, grid_indices = build_mesh_positions(xgrid[0], ygrid[0], zgrid[0])
+    npoint = positions.shape[0]
 
-                phi = np.zeros((nbasis), dtype=np.complex128)
-                for io in range(nbasis):
-                    phi[io] = _orbital_value_at_position(projector, io, position_vector, supercell_vectors)
+    for ip in range(npoint):
+        ix = int(grid_indices[ip, 0])
+        iy = int(grid_indices[ip, 1])
+        iz = int(grid_indices[ip, 2])
+        position_vector = positions[ip]
 
-                density_value = np.zeros((nspin), dtype=np.float64)
-                _accumulate_density_from_pairs(phi, dm_mu, dm_nu, dm_unique, pair_factor, density_value)
-                for isp in range(nspin):
-                    rho[isp][ix][iy][iz] = float(density_value[isp])
+        phi = np.zeros((nbasis), dtype=np.complex128)
+        for io in range(nbasis):
+            phi[io] = _orbital_value_at_position(projector, io, position_vector, supercell_vectors)
+
+        density_value = np.zeros((nspin), dtype=np.float64)
+        _accumulate_density_from_pairs(phi, dm_mu, dm_nu, dm_unique, pair_factor, density_value)
+        for isp in range(nspin):
+            rho[isp][ix][iy][iz] = float(density_value[isp])
 
     projector.rho = rho
     return rho

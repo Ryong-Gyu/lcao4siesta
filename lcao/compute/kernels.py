@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 try:
     from numba import njit
@@ -55,3 +56,25 @@ def accumulate_overlap_weight(Sover, xij, kpt, ind, qcos, qsin):
     """
     phase = (kpt * xij[ind]).sum()
     return _accumulate_overlap_phase(Sover[ind], phase, qcos, qsin)
+
+
+@njit(cache=True)
+def build_mesh_positions(xgrid0, ygrid0, zgrid0):
+    """Flatten `(na, nb, nc)` mesh arrays into `(npoint, 3)` positions."""
+    na, nb, nc = xgrid0.shape
+    npoint = na * nb * nc
+    positions = np.zeros((npoint, 3), dtype=np.float64)
+    grid_indices = np.zeros((npoint, 3), dtype=np.int64)
+
+    ip = 0
+    for ix in range(na):
+        for iy in range(nb):
+            for iz in range(nc):
+                positions[ip, 0] = xgrid0[ix, iy, iz]
+                positions[ip, 1] = ygrid0[ix, iy, iz]
+                positions[ip, 2] = zgrid0[ix, iy, iz]
+                grid_indices[ip, 0] = ix
+                grid_indices[ip, 1] = iy
+                grid_indices[ip, 2] = iz
+                ip += 1
+    return positions, grid_indices
