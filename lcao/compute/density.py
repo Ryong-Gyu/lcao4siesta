@@ -3,6 +3,28 @@ import numpy as np
 from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - optional dependency
+    def njit(*args, **kwargs):
+        def _decorator(func):
+            return func
+
+        return _decorator
+
+
+@njit(cache=True)
+def _accumulate_density_from_pairs(phi, dm_mu, dm_nu, dm_unique, pair_factor, out_density):
+    npair = dm_mu.shape[0]
+    nspin = out_density.shape[0]
+    for ipair in range(npair):
+        mu = dm_mu[ipair]
+        nu = dm_nu[ipair]
+        pair_product = (phi[mu] * phi[nu]).real
+        weighted_pair = pair_factor[ipair] * pair_product
+        for isp in range(nspin):
+            out_density[isp] += dm_unique[ipair, isp] * weighted_pair
+
 
 def _build_unique_dm_pairs(projector, dm_columns):
     """Build unique (mu, nu) DM pairs in upper-triangular form.
@@ -178,10 +200,10 @@ def electron_density(projector, cell, mesh):
                 for io in range(nbasis):
                     phi[io] = _orbital_value_at_position(projector, io, position_vector, supercell_vectors)
 
-                pair_product = (phi[dm_mu] * phi[dm_nu]).real
+                density_value = np.zeros((nspin), dtype=np.float64)
+                _accumulate_density_from_pairs(phi, dm_mu, dm_nu, dm_unique, pair_factor, density_value)
                 for isp in range(nspin):
-                    density_value = np.sum(dm_unique[:, isp] * pair_factor * pair_product)
-                    rho[isp][ix][iy][iz] = float(density_value)
+                    rho[isp][ix][iy][iz] = float(density_value[isp])
 
     projector.rho = rho
     return rho
