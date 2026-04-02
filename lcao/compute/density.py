@@ -4,7 +4,7 @@ from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
 
-def _build_unique_dm_pairs(projector):
+def _build_unique_dm_pairs(projector, dm_columns):
     """Build unique (mu, nu) DM pairs in upper-triangular form.
 
     Returns arrays ``mu``, ``nu`` and ``dm_unique`` where ``mu <= nu``.
@@ -19,7 +19,7 @@ def _build_unique_dm_pairs(projector):
         row_start = projector.dm_listdptr[io1]
         row_end = row_start + projector.dm_numd[io1]
         for ind in range(row_start, row_end):
-            io2 = projector.dm_listd[ind] - 1
+            io2 = dm_columns[ind]
             mu = io1 if io1 <= io2 else io2
             nu = io2 if io1 <= io2 else io1
             key = (mu, nu)
@@ -39,6 +39,36 @@ def _build_unique_dm_pairs(projector):
         dm_unique[idx] = pair_values[key] / pair_counts[key]
 
     return mu, nu, dm_unique
+
+
+def _dm_columns_zero_based(projector):
+    """Return sparse-DM column indices normalized to Python 0-based indexing.
+
+    SIESTA Fortran files are 1-based, but some Python readers may already convert
+    to 0-based. Accept both conventions, then normalize here.
+    """
+    dm_cols = projector.dm_listd
+
+    is_one_based = np.all((dm_cols >= 1) & (dm_cols <= projector.dm_nb))
+    if is_one_based:
+        return dm_cols - 1
+
+    is_zero_based = np.all((dm_cols >= 0) & (dm_cols < projector.dm_nb))
+    if is_zero_based:
+        return dm_cols
+
+    bad_pos = np.where((dm_cols < 0) | (dm_cols > projector.dm_nb))[0]
+    first_pos = int(bad_pos[0]) if len(bad_pos) else 0
+    bad_value = int(dm_cols[first_pos])
+    row = int(np.searchsorted(projector.dm_listdptr, first_pos, side='right') - 1)
+    row = max(0, min(row, projector.dm_nb - 1))
+
+    raise ValueError(
+        'DM connectivity contains invalid orbital indices after checking both '
+        f'Fortran(1-based) and Python(0-based) conventions: '
+        f'dm_listd[{first_pos}]={bad_value} (row io={row + 1}), basis size={projector.dm_nb}. '
+        f'Likely cause: inconsistent files ({projector._dm_file} vs {projector._system}.ORB_INDX).'
+    )
 
 
 def _orbital_value_at_position(projector, io, position_vector, supercell_vectors):
@@ -98,6 +128,7 @@ def electron_density(projector, cell, mesh):
     ``rho(r) = sum_{mu,nu} DM_{mu,nu} * phi_mu(r) * phi_nu(r)``.
     """
     projector.load_context(need_struct_supercell=True, need_orbital_metadata=True)
+    dm_columns = _dm_columns_zero_based(projector)
 
     xgrid, ygrid, zgrid = projector.unit_cell_grid(cell, mesh)
 
@@ -107,7 +138,7 @@ def electron_density(projector, cell, mesh):
 
     nbasis = projector.dm_nb
     nspin = projector.dm_ns
-    dm_mu, dm_nu, dm_unique = _build_unique_dm_pairs(projector)
+    dm_mu, dm_nu, dm_unique = _build_unique_dm_pairs(projector, dm_columns)
     pair_factor = np.where(dm_mu == dm_nu, 1.0, 2.0)
 
     rho = np.zeros((nspin, na, nb, nc), dtype=float)

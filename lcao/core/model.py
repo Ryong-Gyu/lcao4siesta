@@ -392,6 +392,14 @@ class LcaoProjector:
         x, y, z = vector
         r2 = vector ** 2
         r = np.sqrt(sum(r2))
+        if r < 1.0e-20:
+            # Match SIESTA's tiny-radius safeguard in all_phi/rlylm path.
+            # At r≈0, angular coordinates are undefined; choosing (theta,phi)=0
+            # avoids NaNs while radial factors control the physical limit.
+            phi = 0.0
+            theta = 0.0
+            return scipy.special.sph_harm(m, l, theta, phi)
+
         phi = np.arccos(z / r)
         theta = np.arctan2(y, x) + pi
         return scipy.special.sph_harm(m, l, theta, phi)
