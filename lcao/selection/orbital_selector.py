@@ -1,6 +1,7 @@
 import numpy as np
 
 from lcao.core.model import overlap_tolerance
+from lcao.core.orbital_m import normalize_orbital_m
 
 
 def orbital_mask(projector, select):
@@ -36,7 +37,18 @@ def orbital_mask(projector, select):
 
                 if len(indexes) >= 4:
                     atom_m = int(indexes[3])
-                    ibuff = [i for i in ibuff if zx[i] == atom_m]
+                    ibuff = [
+                        i
+                        for i in ibuff
+                        if normalize_orbital_m(
+                            zx[i],
+                            zl[i],
+                            source='ORB_INDX',
+                            orbital_index=i + 1,
+                            file_path=f'{projector._system}.ORB_INDX',
+                        )
+                        == atom_m
+                    ]
 
                     if len(indexes) == 5:
                         atom_zeta = int(indexes[4])
@@ -55,7 +67,13 @@ def orbital_mask(projector, select):
             m_ia[i] = za[idx]
             m_izn[i] = zn[idx]
             m_izl[i] = zl[idx]
-            m_izm[i] = zx[idx]
+            m_izm[i] = normalize_orbital_m(
+                zx[idx],
+                zl[idx],
+                source='ORB_INDX',
+                orbital_index=idx + 1,
+                file_path=f'{projector._system}.ORB_INDX',
+            )
             m_izz[i] = zz[idx]
 
         projector._target.append({

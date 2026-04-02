@@ -1,6 +1,7 @@
 import numpy as np
 
 from lcao.core.model import phi_tolerance
+from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
 
 def _orbital_value_at_position(projector, io, position_vector, supercell_vectors):
@@ -9,7 +10,16 @@ def _orbital_value_at_position(projector, io, position_vector, supercell_vectors
 
     target_n = projector.orbital_n[io]
     target_l = projector.orbital_l[io]
-    target_m = projector.orbital_ml[io]
+    # ORB_INDX magnetic quantum number encoding:
+    # - signed: m in [-l, ..., +l] (use directly)
+    # - legacy: ml in [1, ..., 2l+1] (convert by ml - l - 1)
+    target_m = normalize_orbital_m(
+        projector.orbital_ml[io],
+        target_l,
+        source='ORB_INDX',
+        orbital_index=io + 1,
+        file_path=f'{projector._system}.ORB_INDX',
+    )
     target_z = projector.orbital_zeta[io]
 
     target_position = projector.atoms[atom_index]
@@ -23,6 +33,13 @@ def _orbital_value_at_position(projector, io, position_vector, supercell_vectors
         if abs(phir) < phi_tolerance:
             continue
 
+        validate_signed_orbital_m(
+            target_m,
+            target_l,
+            source='ORB_INDX',
+            orbital_index=io + 1,
+            file_path=f'{projector._system}.ORB_INDX',
+        )
         spherical = projector.Yml(xji, target_m, target_l)
         value += phir * spherical
 
