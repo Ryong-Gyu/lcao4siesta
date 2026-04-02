@@ -4,6 +4,43 @@ from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
 
+def _build_unique_dm_pairs(projector):
+    """Build unique (mu, nu) DM pairs in upper-triangular form.
+
+    Returns arrays ``mu``, ``nu`` and ``dm_unique`` where ``mu <= nu``.
+    If both (mu,nu) and (nu,mu) are present in the sparse DM rows, their
+    values are averaged to make the representation order-independent.
+    """
+    nspin = projector.dm_ns
+    pair_values = {}
+    pair_counts = {}
+
+    for io1 in range(projector.dm_nb):
+        row_start = projector.dm_listdptr[io1]
+        row_end = row_start + projector.dm_numd[io1]
+        for ind in range(row_start, row_end):
+            io2 = projector.dm_listd[ind] - 1
+            mu = io1 if io1 <= io2 else io2
+            nu = io2 if io1 <= io2 else io1
+            key = (mu, nu)
+
+            if key not in pair_values:
+                pair_values[key] = projector.dm[ind].copy()
+                pair_counts[key] = 1
+            else:
+                pair_values[key] += projector.dm[ind]
+                pair_counts[key] += 1
+
+    keys = sorted(pair_values.keys())
+    mu = np.array([k[0] for k in keys], dtype=int)
+    nu = np.array([k[1] for k in keys], dtype=int)
+    dm_unique = np.zeros((len(keys), nspin), dtype=float)
+    for idx, key in enumerate(keys):
+        dm_unique[idx] = pair_values[key] / pair_counts[key]
+
+    return mu, nu, dm_unique
+
+
 def _orbital_value_at_position(projector, io, position_vector, supercell_vectors):
     atom_symbol = projector.atom_species[io]
     atom_index = projector.atom_index[io] - 1
@@ -70,6 +107,8 @@ def electron_density(projector, cell, mesh):
 
     nbasis = projector.dm_nb
     nspin = projector.dm_ns
+    dm_mu, dm_nu, dm_unique = _build_unique_dm_pairs(projector)
+    pair_factor = np.where(dm_mu == dm_nu, 1.0, 2.0)
 
     rho = np.zeros((nspin, na, nb, nc), dtype=float)
     supercell_vectors = projector._supercell_vector_list
@@ -90,16 +129,10 @@ def electron_density(projector, cell, mesh):
                 for io in range(nbasis):
                     phi[io] = _orbital_value_at_position(projector, io, position_vector, supercell_vectors)
 
+                pair_product = (phi[dm_mu] * phi[dm_nu]).real
                 for isp in range(nspin):
-                    density_value = 0.0
-                    for io1 in range(nbasis):
-                        row_start = projector.dm_listdptr[io1]
-                        row_end = row_start + projector.dm_numd[io1]
-                        for ind in range(row_start, row_end):
-                            io2 = projector.dm_listd[ind] - 1
-                            density_value += projector.dm[ind][isp] * (phi[io1] * phi[io2]).real
-
-                    rho[isp][ix][iy][iz] = density_value
+                    density_value = np.sum(dm_unique[:, isp] * pair_factor * pair_product)
+                    rho[isp][ix][iy][iz] = float(density_value)
 
     projector.rho = rho
     return rho

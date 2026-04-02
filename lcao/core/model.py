@@ -400,9 +400,11 @@ class LcaoProjector:
         cell = np.array(cell)
         na, nb, nc = int(mesh[0]), int(mesh[1]), int(mesh[2])
 
-        ua = cell[0] if na == 1 else cell[0] / (na - 1)
-        ub = cell[1] if nb == 1 else cell[1] / (nb - 1)
-        uc = cell[2] if nc == 1 else cell[2] / (nc - 1)
+        # SIESTA real-space mesh is periodic on [0, a), [0, b), [0, c).
+        # Therefore grid increments are cell-vector / mesh-size.
+        ua = cell[0] / na
+        ub = cell[1] / nb
+        uc = cell[2] / nc
 
         xgrid = np.zeros((1, na, nb, nc), dtype=float)
         ygrid = np.zeros((1, na, nb, nc), dtype=float)
