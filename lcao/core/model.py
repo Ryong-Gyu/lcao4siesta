@@ -1,4 +1,5 @@
 import math
+import os
 
 import numpy as np
 import scipy
@@ -21,6 +22,7 @@ class LcaoProjector:
 
         self._target = []
         self._readDM()
+        self._readORB_INDX()
         self._readIon()
 
     def _readDM(self):
@@ -46,6 +48,22 @@ class LcaoProjector:
         self._orbital_n = results[8]
         self._orbital_symbol = results[9]
 
+    def _readORB_INDX(self):
+        file_name = self._system + '.ORB_INDX'
+        if not os.path.exists(file_name):
+            return
+
+        results = readers.read_orb_indx(file_name)
+        self.orbital_io = results[0]
+        self.atom_index = results[1]
+        self.atom_species_index = results[2]
+        self.atom_species = results[3]
+        self.orbital_iao = results[4]
+        self.orbital_n = results[5]
+        self.orbital_l = results[6]
+        self.orbital_ml = results[7]
+        self.orbital_zeta = results[8]
+
     def _readHSX(self):
         file_name = self._system + '.HSX'
         results = readers.read_hsx(file_name)
@@ -56,12 +74,41 @@ class LcaoProjector:
         self.Hamilt = results[4]
         self.Sover = results[5]
         self.xij = results[6]
-        self.atom_index = results[7]
-        self.atom_species = results[8]
-        self.orbital_n = results[9]
-        self.orbital_l = results[10]
-        self.orbital_ml = results[11]
-        self.orbital_zeta = results[12]
+        self._hsx_atom_index = results[7]
+        self._hsx_atom_species = results[8]
+        self._hsx_orbital_n = results[9]
+        self._hsx_orbital_l = results[10]
+        self._hsx_orbital_ml = results[11]
+        self._hsx_orbital_zeta = results[12]
+        self._cross_check_orbital_metadata()
+
+    def _cross_check_orbital_metadata(self):
+        required_orb = ('atom_index', 'orbital_n', 'orbital_l', 'orbital_ml', 'orbital_zeta')
+        if not all(hasattr(self, field) for field in required_orb):
+            return
+        required_hsx = (
+            '_hsx_atom_index',
+            '_hsx_orbital_n',
+            '_hsx_orbital_l',
+            '_hsx_orbital_ml',
+            '_hsx_orbital_zeta',
+        )
+        if not all(hasattr(self, field) for field in required_hsx):
+            return
+
+        for orb_field, hsx_field in (
+            ('atom_index', '_hsx_atom_index'),
+            ('orbital_n', '_hsx_orbital_n'),
+            ('orbital_l', '_hsx_orbital_l'),
+            ('orbital_ml', '_hsx_orbital_ml'),
+            ('orbital_zeta', '_hsx_orbital_zeta'),
+        ):
+            orb_values = getattr(self, orb_field)
+            hsx_values = getattr(self, hsx_field)
+            if len(orb_values) != len(hsx_values):
+                raise ValueError(f'ORB_INDX/HSX mismatch for {orb_field}: {len(orb_values)} != {len(hsx_values)}')
+            if np.any(orb_values != hsx_values):
+                raise ValueError(f'ORB_INDX/HSX mismatch detected for {orb_field}')
 
     def _readIon(self):
         self.ions = {}
@@ -112,7 +159,7 @@ class LcaoProjector:
 
         self._supercell_vector_list = vectors
 
-    def load_context(self, need_wfsx_hsx=False, need_struct_supercell=False):
+    def load_context(self, need_wfsx_hsx=False, need_struct_supercell=False, need_orbital_metadata=False):
         if need_wfsx_hsx:
             if not hasattr(self, 'gamma'):
                 self._readWFSX()
@@ -121,6 +168,7 @@ class LcaoProjector:
             for field in ('gamma', 'kpoints', 'kweight', 'wavefunction', 'eigenvalue', 'Hamilt', 'Sover', 'xij'):
                 if not hasattr(self, field):
                     raise ValueError(f'Missing required field: {field}')
+            need_orbital_metadata = True
 
         if need_struct_supercell:
             if not hasattr(self, 'cell'):
@@ -130,6 +178,27 @@ class LcaoProjector:
             for field in ('cell', 'atoms', 'species', '_supercell_vector_list'):
                 if not hasattr(self, field):
                     raise ValueError(f'Missing required field: {field}')
+
+        if need_orbital_metadata:
+            if not hasattr(self, 'atom_index'):
+                self._readORB_INDX()
+            required = (
+                'atom_index',
+                'atom_species',
+                'orbital_n',
+                'orbital_l',
+                'orbital_ml',
+                'orbital_zeta',
+                'orbital_io',
+                'orbital_iao',
+            )
+            for field in required:
+                if not hasattr(self, field):
+                    raise ValueError(f'Missing required ORB_INDX field: {field}')
+            if len(self.atom_index) != self.dm_nb:
+                raise ValueError(
+                    f'ORB_INDX orbital count ({len(self.atom_index)}) does not match DM basis size ({self.dm_nb})'
+                )
 
     def delta(self, x):
         if abs(x) > 8 * smearing:
