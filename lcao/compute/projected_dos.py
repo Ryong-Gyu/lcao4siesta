@@ -1,9 +1,15 @@
 import numpy as np
 
+from lcao.compute.kernels import accumulate_overlap_weight, compute_projection_factor
 from lcao.selection.orbital_selector import mask_to_pointer, orbital_mask
 
 
 def orbital_projected_denstiy_of_state(projector, select, energys):
+    """Compute orbital-projected density of states.
+
+    Contract: for identical inputs, the output `pdos` keeps the same shape and
+    iteration order as before (`(ntarget, nenergy)`).
+    """
     projector.load_context(need_wfsx_hsx=True)
     projector._target = []
 
@@ -47,15 +53,9 @@ def orbital_projected_denstiy_of_state(projector, select, energys):
                         iio = 0
                         for io2 in list_io[itar]:
                             ind = list_ptr[itar][iio]
-                            if gamma == 1:
-                                qcos = wf[0][io1] * wf[0][io2]
-                                qsin = 0
-                            else:
-                                qcos = wf[0][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik] + wf[1][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik]
-                                qsin = wf[0][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik] - wf[1][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik]
-                            alfa = (kpt[ik] * xij[ind]).sum()
-                            factor = qcos * np.cos(alfa) - qsin * np.sin(alfa)
-                            buff2[iio] = Sover[ind] * factor
+                            qcos, qsin = compute_projection_factor(gamma, wf, io1, io2, iw, isp, ik)
+                            real_weight, _ = accumulate_overlap_weight(Sover, xij, kpt[ik], ind, qcos, qsin)
+                            buff2[iio] = real_weight
                             iio += 1
                     buff1[itar][ik][iw] = buff2.sum()
 

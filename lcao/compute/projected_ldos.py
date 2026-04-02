@@ -3,11 +3,17 @@ import time
 
 import numpy as np
 
+from lcao.compute.kernels import accumulate_overlap_weight, compute_projection_factor
 from lcao.core.model import phi_tolerance
 from lcao.selection.orbital_selector import mask_to_pointer, orbital_mask
 
 
 def orbital_projected_local_density_of_state(projector, select, energys, cell, mesh):
+    """Compute orbital-projected local density of states on a real-space grid.
+
+    Contract: for identical inputs, the output `pldos` keeps the same shape and
+    iteration order as before (`(ntarget, nenergy, na, nb, nc)`).
+    """
     projector.load_context(need_wfsx_hsx=True, need_struct_supercell=True)
     projector._target = []
 
@@ -91,16 +97,16 @@ def orbital_projected_local_density_of_state(projector, select, energys, cell, m
                                     iio2 = 0
                                     for io2 in list_io[itar]:
                                         ind = list_ptr[itar][iio2]
-                                        if gamma == 1:
-                                            qcos = wf[0][io1] * wf[0][io2]
-                                            qsin = 0
-                                        else:
-                                            qcos = wf[0][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik] + wf[1][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik]
-                                            qsin = wf[0][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik] - wf[1][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik]
-
+                                        qcos, qsin = compute_projection_factor(gamma, wf, io1, io2, iw, isp, ik)
                                         alfa = np.inner(kpt[ik], xij[ind])
-                                        buff2[0][iio2] = qcos * math.cos(alfa) - qsin * math.sin(alfa)
-                                        buff2[1][iio2] = qcos * math.sin(alfa) + qsin * math.sin(alfa)
+                                        real_weight, imag_weight = accumulate_overlap_weight(Sover, xij, kpt[ik], ind, qcos, qsin)
+
+                                        if Sover[ind] != 0:
+                                            buff2[0][iio2] = real_weight / Sover[ind]
+                                            buff2[1][iio2] = imag_weight / Sover[ind]
+                                        else:
+                                            buff2[0][iio2] = 0
+                                            buff2[1][iio2] = 0
                                         buff2 *= Sover[ind]
                                         iio2 += 1
 

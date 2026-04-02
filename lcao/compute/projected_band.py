@@ -1,9 +1,15 @@
 import numpy as np
 
+from lcao.compute.kernels import accumulate_overlap_weight, compute_projection_factor
 from lcao.selection.orbital_selector import mask_to_pointer, orbital_mask
 
 
 def orbital_projected_bandstructure(projector, select):
+    """Compute orbital-projected band weights.
+
+    Contract: for identical inputs, the output `fat` keeps the same shape and
+    iteration order as before (`(ntarget, nkpoints, nwavefunctions)`).
+    """
     projector.load_context(need_wfsx_hsx=True)
     projector._target = []
     if isinstance(select, str):
@@ -40,15 +46,9 @@ def orbital_projected_bandstructure(projector, select):
                         iio = 0
                         for io2 in list_io[itar]:
                             ind = list_ptr[itar][iio]
-                            if gamma == 1:
-                                qcos = wf[0][io1] * wf[0][io2]
-                                qsin = 0
-                            else:
-                                qcos = wf[0][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik] + wf[1][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik]
-                                qsin = wf[0][io1][iw][isp][ik] * wf[1][io2][iw][isp][ik] - wf[1][io1][iw][isp][ik] * wf[0][io2][iw][isp][ik]
-                            phase = (kpt[ik] * xij[ind]).sum()
-                            factor = qcos * np.cos(phase) - qsin * np.sin(phase)
-                            buff[iio] = Sover[ind] * factor
+                            qcos, qsin = compute_projection_factor(gamma, wf, io1, io2, iw, isp, ik)
+                            real_weight, _ = accumulate_overlap_weight(Sover, xij, kpt[ik], ind, qcos, qsin)
+                            buff[iio] = real_weight
                             iio += 1
                     fat[itar][ik][iw] = buff.sum()
 
