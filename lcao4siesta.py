@@ -1,3 +1,4 @@
+from lcao.compute.density import electron_density as _electron_density
 from lcao.compute.projected_band import orbital_projected_bandstructure as _orbital_projected_bandstructure
 from lcao.compute.projected_dos import orbital_projected_denstiy_of_state as _orbital_projected_denstiy_of_state
 from lcao.compute.projected_ldos import orbital_projected_local_density_of_state as _orbital_projected_local_density_of_state
@@ -23,3 +24,6 @@ class lcao(LcaoProjector):
 
     def orbital_projected_local_density_of_state(self, select, energys, cell, mesh):
         return _orbital_projected_local_density_of_state(self, select, energys, cell, mesh)
+
+    def electron_density(self, cell, mesh):
+        return _electron_density(self, cell, mesh)
