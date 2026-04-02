@@ -103,6 +103,8 @@ def readORB_INDX(path):
     if not os.path.exists(path):
         raise FileNotFoundError(f'ORB_INDX file not found: {path}')
 
+    n_unit_cell_orbitals = None
+
     io = []
     ia = []
     ispec = []
@@ -119,6 +121,12 @@ def readORB_INDX(path):
             if not line:
                 continue
             if ' = orbitals in unit cell and supercell' in line:
+                prefix = line.split('=')[0].split()
+                if len(prefix) >= 1:
+                    try:
+                        n_unit_cell_orbitals = int(prefix[0])
+                    except ValueError:
+                        n_unit_cell_orbitals = None
                 continue
             if line.startswith('Column codes:'):
                 break
@@ -145,16 +153,22 @@ def readORB_INDX(path):
     if len(io) == 0:
         raise ValueError(f'No orbital records parsed from ORB_INDX file: {path}')
 
+    if n_unit_cell_orbitals is not None:
+        io_arr = np.array(io, dtype=int)
+        unit_mask = io_arr <= n_unit_cell_orbitals
+    else:
+        unit_mask = np.ones(len(io), dtype=bool)
+
     return (
-        np.array(io, dtype=int),
-        np.array(ia, dtype=int),
-        np.array(ispec, dtype=int),
-        np.array(spec),
-        np.array(iao, dtype=int),
-        np.array(n, dtype=int),
-        np.array(l, dtype=int),
-        np.array(m, dtype=int),
-        np.array(z, dtype=int),
+        np.array(io, dtype=int)[unit_mask],
+        np.array(ia, dtype=int)[unit_mask],
+        np.array(ispec, dtype=int)[unit_mask],
+        np.array(spec)[unit_mask],
+        np.array(iao, dtype=int)[unit_mask],
+        np.array(n, dtype=int)[unit_mask],
+        np.array(l, dtype=int)[unit_mask],
+        np.array(m, dtype=int)[unit_mask],
+        np.array(z, dtype=int)[unit_mask],
     )
 
 
