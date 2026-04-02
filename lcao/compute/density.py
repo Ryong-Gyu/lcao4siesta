@@ -57,6 +57,24 @@ def _dm_columns_zero_based(projector):
     if is_zero_based:
         return dm_cols
 
+    if hasattr(projector, 'supercell_orbital_io') and hasattr(projector, 'supercell_orbital_iuo'):
+        io_map = {
+            int(io): int(iuo) - 1
+            for io, iuo in zip(projector.supercell_orbital_io, projector.supercell_orbital_iuo)
+        }
+
+        can_map_fortran = np.all(dm_cols >= 1) and np.all([int(col) in io_map for col in dm_cols])
+        if can_map_fortran:
+            mapped = np.array([io_map[int(col)] for col in dm_cols], dtype=int)
+            if np.all((mapped >= 0) & (mapped < projector.dm_nb)):
+                return mapped
+
+        can_map_zero = np.all(dm_cols >= 0) and np.all([int(col + 1) in io_map for col in dm_cols])
+        if can_map_zero:
+            mapped = np.array([io_map[int(col + 1)] for col in dm_cols], dtype=int)
+            if np.all((mapped >= 0) & (mapped < projector.dm_nb)):
+                return mapped
+
     bad_pos = np.where((dm_cols < 0) | (dm_cols > projector.dm_nb))[0]
     first_pos = int(bad_pos[0]) if len(bad_pos) else 0
     bad_value = int(dm_cols[first_pos])

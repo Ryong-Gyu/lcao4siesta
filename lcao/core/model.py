@@ -73,6 +73,8 @@ class LcaoProjector:
         self.orbital_l = results[6]
         self.orbital_ml = results[7]
         self.orbital_zeta = results[8]
+        self.supercell_orbital_io = results[9]
+        self.supercell_orbital_iuo = results[10]
         self.species_id_to_label = self._build_species_id_to_label()
 
     def _readHSX(self):

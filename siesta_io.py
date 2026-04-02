@@ -114,6 +114,8 @@ def readORB_INDX(path):
     l = []
     m = []
     z = []
+    io_all = []
+    iuo_all = []
 
     with open(path, 'r') as handle:
         for raw in handle:
@@ -138,7 +140,8 @@ def readORB_INDX(path):
                 continue
 
             try:
-                io.append(int(cols[0]))
+                io_value = int(cols[0])
+                io.append(io_value)
                 ia.append(int(cols[1]))
                 ispec.append(int(cols[2]))
                 spec.append(cols[3])
@@ -147,6 +150,8 @@ def readORB_INDX(path):
                 l.append(int(cols[6]))
                 m.append(int(cols[7]))
                 z.append(int(cols[8]))
+                io_all.append(io_value)
+                iuo_all.append(int(cols[-1]))
             except ValueError:
                 continue
 
@@ -169,6 +174,8 @@ def readORB_INDX(path):
         np.array(l, dtype=int)[unit_mask],
         np.array(m, dtype=int)[unit_mask],
         np.array(z, dtype=int)[unit_mask],
+        np.array(io_all, dtype=int),
+        np.array(iuo_all, dtype=int),
     )
 
 
