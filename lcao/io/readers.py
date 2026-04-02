@@ -25,3 +25,8 @@ def read_ion(path):
 
 def discover_ion_files(pattern='*.ion'):
     return glob.glob(pattern)
+
+
+
+def read_rho(path):
+    return siesta.readGrid(path)
