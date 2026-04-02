@@ -641,3 +641,14 @@ def readStruct():
                     ATOMS = ATOMS * parameter
 
     return CELL, ATOMS, SPEC
+
+
+# snake_case aliases
+def read_dm(fname):
+    return readDM(fname)
+
+def read_ion(fname):
+    return readIon(fname)
+
+def read_grid(fname):
+    return readGrid(fname)
