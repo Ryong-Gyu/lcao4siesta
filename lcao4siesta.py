@@ -9,10 +9,7 @@
 #--------- Medules list ---------#
 
 import siesta_io as io
-import collections
 import numpy as np
-import string
-import struct
 import scipy
 import glob
 import math
@@ -31,33 +28,28 @@ phi_tolerance = 1.0e-10
 
 class lcao:
     
-    def __init__(self):
+    def __init__(self, system='Carbon', dm_file=None, ion_files=None):
 
-        print('####################################\n')
-        print('#          PyProjection            #\n')
-        print('####################################\n') 
-        print('Code developer : RONG\n')
-        print('\n')
-        
         #---- Input variables ----#
-        
-        #self._system = input('System label : ')
-        
-        #---- Read SIESTA files ----#
-        
-        self._system = 'Carbon'
-        self._readWFSX()
-        self._readHSX()
+        self._system = system
+        self._dm_file = dm_file if dm_file is not None else self._system + '.DM'
+        self._ion_files = ion_files
+
+        #---- Basic information only (requested) ----#
+        self._readDM()
         self._readIon()
-        self._readStruct()
-        self._supercell_vectors()
 
         #---- Initiate variable ----#
-        self._target = []  
-        
-        #---- Main interface ----#
-        
-        self.selectMode()
+        self._target = []
+
+    def _readDM(self):
+        results = io.read_dm(self._dm_file)
+        self.dm_nb = results[0]
+        self.dm_ns = results[1]
+        self.dm_numd = results[2]
+        self.dm_listdptr = results[3]
+        self.dm_listd = results[4]
+        self.dm = results[5]
 
     #------- Methods : Read and Write (IO) -------#
         
@@ -104,15 +96,27 @@ class lcao:
     def _readIon(self):
         
         self.ions = {}
-        
-        total_atomic_species = self._atom_symbol
-        atomic_species = dict(collections.Counter(total_atomic_species)).keys()
+        if self._ion_files is not None:
+            for symbol, file_name in self._ion_files.items():
+                self.ions.update({symbol: io.read_ion(file_name)})
+            return
 
-        for ia in atomic_species:
-            
-            file_name = ia + '.ion'
-            ion = io.readIon(file_name)
-            self.ions.update({ia:ion})
+        for file_name in glob.glob('*.ion'):
+            symbol = file_name.replace('.ion', '')
+            ion = io.read_ion(file_name)
+            self.ions.update({symbol:ion})
+
+    def _ensure_wfsx_hsx(self):
+        if not hasattr(self, 'gamma'):
+            self._readWFSX()
+        if not hasattr(self, 'numh'):
+            self._readHSX()
+
+    def _ensure_struct_supercell(self):
+        if not hasattr(self, 'cell'):
+            self._readStruct()
+        if not hasattr(self, '_supercell_vector_list'):
+            self._build_supercell_vectors()
 
     def _readStruct(self):
         
@@ -122,50 +126,6 @@ class lcao:
         self.atoms = results[1]
         self.species = results[2]
 
-    def _writeCube(self, fileName, cube_data):
-
-        cube = open(fileName,'w')
-
-        cell = self.cell
-        atoms =self.atoms
-        species = self.species
-        number_of_atoms = len(atoms)   
-        
-        na = self.na
-        nb = self.nb
-        nc = self.nc
-        ua = self._ua
-        ub = self._ub
-        uc = self._uc
-        
-        # file names
-        cube.write(' '+fileName+'\n')
-        cube.write(' '+fileName+'\n')
-        # atoms and grid information
-        cube.write('{0:>5d}{1:>12.6f}{2:>12.6f}{3:>12.6f}\n'.format(number_of_atoms, 0, 0, 0))
-        cube.write('{0:>5d}{1:>12.6f}{2:>12.6f}{3:>12.6f}\n'.format(na, ua[0], ua[1], ua[2]))  
-        cube.write('{0:>5d}{1:>12.6f}{2:>12.6f}{3:>12.6f}\n'.format(nb, ub[0], ub[1], ub[2]))
-        cube.write('{0:>5d}{1:>12.6f}{2:>12.6f}{3:>12.6f}\n'.format(nc, uc[0], uc[1], uc[2]))
-        for ia in range(number_of_atoms):
-            cube.write('{0:>5d}{1:>12.6f}{2:>12.6f}{3:>12.6f}{4:>12.6f}\n'.format(species[ia], 0,
-                                                                        atoms[ia][0],
-                                                                        atoms[ia][1],
-                                                                        atoms[ia][2]
-                                                                        ))
-        for ia in range(na):
-            for ib in range(nb):
-                line_counter = 0
-                for ic in range(nc):
-                    cube.write('{0:>13.5E}'.format(cube_data[ia][ib][ic]))
-                    if (ic+1)%10 == 0:
-                        cube.write('\n')
-                    else:
-                        if ic == nc-1:
-                            cube.write('\n')
-        cube.close
-        
-        
-        
 
     #------- Methods : Calculation -------#
             
@@ -359,14 +319,13 @@ class lcao:
 
     #------- Methods : Real space grid -------#
 
-    def unit_cell_grid(self):
-        
-        self.get_grid_point()
-        
-        cell = self.cell
-        na = self.na
-        nb = self.nb
-        nc = self.nc
+    def unit_cell_grid(self, cell, mesh):
+        """
+        readGrid 형식 입력(cell, mesh)을 받아 rho 형식 좌표 그리드를 리턴.
+        Return: (xrho, yrho, zrho) with shape (1, mesh[0], mesh[1], mesh[2]).
+        """
+        cell = np.array(cell)
+        na, nb, nc = int(mesh[0]), int(mesh[1]), int(mesh[2])
         
         if na == 1: ua = cell[0]
         else:       ua = cell[0] / (na-1)
@@ -375,26 +334,20 @@ class lcao:
         if nc == 1: uc = cell[2]
         else:       uc = cell[2] / (nc-1)
         
-        xgrid = np.zeros((na,nb,nc), dtype = float)
-        ygrid = np.zeros((na,nb,nc), dtype = float)
-        zgrid = np.zeros((na,nb,nc), dtype = float)
+        xgrid = np.zeros((1, na, nb, nc), dtype = float)
+        ygrid = np.zeros((1, na, nb, nc), dtype = float)
+        zgrid = np.zeros((1, na, nb, nc), dtype = float)
         
         for ia in range(na):
             for ib in range(nb):
                 for ic in range(nc):
                     position_vector = ia * ua + ib * ub + ic * uc
-                    xgrid[ia,ib,ic] = position_vector[0]
-                    ygrid[ia,ib,ic] = position_vector[1]
-                    zgrid[ia,ib,ic] = position_vector[2]
-
-        self._ua = ua
-        self._ub = ub
-        self._uc = uc
-        self._xgrid = xgrid
-        self._ygrid = ygrid
-        self._zgrid = zgrid
+                    xgrid[0, ia,ib,ic] = position_vector[0]
+                    ygrid[0, ia,ib,ic] = position_vector[1]
+                    zgrid[0, ia,ib,ic] = position_vector[2]
+        return xgrid, ygrid, zgrid
         
-    def _supercell_vectors(self):
+    def _build_supercell_vectors(self):
         
         cell = self.cell
         basis = self.ions
@@ -412,9 +365,9 @@ class lcao:
         length_b = self.length(cell[1])
         length_c = self.length(cell[2])
         
-        na = int(math.ceil(cutoff/length_a))
-        nb = int(math.ceil(cutoff/length_b))      
-        nc = int(math.ceil(cutoff/length_c))
+        na = int(math.ceil(max_cutoff/length_a))
+        nb = int(math.ceil(max_cutoff/length_b))
+        nc = int(math.ceil(max_cutoff/length_c))
         
         nsc = (2*na+1) * (2*nb+1) * (2*nc+1)
         vectors = np.zeros((nsc,3), dtype = float)
@@ -429,43 +382,15 @@ class lcao:
                     
                     index += 1
                     
-        self._supercell_vectors = vectors
-        
-    #------- Methods : Interface -------#
-        
-    def selectMode(self):
-        
-        mode = int(input('Select calculation mode (1:fat 2;pldos) : '))
-        if mode == 1:
-            self.orbital_projected_bandstructure()
-        elif mode == 2:
-            self.orbital_projected_local_density_of_state()
-
-    def get_target_input(self):
-        
-        select = input('Type representation of target orbital : ')
-        return select
-    
-    def get_grid_point(self):
-        
-        self.na = int(input('Number of grid points along a vector : '))
-        self.nb = int(input('Number of grid points along b vector : '))
-        self.nc = int(input('Number of grid points along c vector : '))
-
-    def get_energy_range(self):
-        
-        self.minE = float(input('Minimum energy : '))
-        self.maxE = float(input('Maximum energy : '))
-        self.nptE = int(input('Number of point : '))
-        
-        return np.linspace(self.minE, self.maxE, self.nptE)
+        self._supercell_vector_list = vectors
 
     #------- Methods : Oribital projeccted bandstructure -------#
 
-    def orbital_projected_bandstructure(self):
-        
+    def orbital_projected_bandstructure(self, select):
+        self._ensure_wfsx_hsx()
         # Select target orbitals
-        select = [self.get_target_input()]
+        if isinstance(select, str):
+            select = [select]
         self.orbital_mask(select)
         self.mask_to_pointer()
         
@@ -519,18 +444,20 @@ class lcao:
                                 iio += 1
                                 
                         fat[itar][ik][iw] = buff.sum() # sum over projection orbitals
-        self.fat = weights
+        self.fat = fat
+        return fat
 
     #------- Methods : Oribital projeccted density of state -------#
 
-    def orbital_projected_denstiy_of_state(self):
-
+    def orbital_projected_denstiy_of_state(self, select, energys):
+        self._ensure_wfsx_hsx()
         # Select range of energy
-        energys = self.get_energy_range()
-        nenergy = self.nptE
+        energys = np.array(energys)
+        nenergy = len(energys)
         
         # Select target orbitals
-        select = [self.get_target_input()]
+        if isinstance(select, str):
+            select = [select]
         self.orbital_mask(select)
         self.mask_to_pointer()
         
@@ -599,23 +526,26 @@ class lcao:
                 pdos[itar][ie] = buff0[ie].sum()
                        
         self.pdos = pdos
+        return pdos
 
     #------- Methods : Oribital projeccted local density of states -------#
 
    # @profile
-    def orbital_projected_local_density_of_state(self):
-        
+    def orbital_projected_local_density_of_state(self, select, energys, cell, mesh):
+        self._ensure_wfsx_hsx()
+        self._ensure_struct_supercell()
         # Select range of energy
-        energys = self.get_energy_range()
-        nenergy = self.nptE
+        energys = np.array(energys)
+        nenergy = len(energys)
     
         # Select target orbitals
-        select = [self.get_target_input()]
+        if isinstance(select, str):
+            select = [select]
         self.orbital_mask(select)
         self.mask_to_pointer()
         
-        # Define number of grid points
-        self.unit_cell_grid()
+        # Define number of grid points from readGrid 양식 입력
+        xgrid, ygrid, zgrid = self.unit_cell_grid(cell, mesh)
         
         # WFSX information
         gamma = self.gamma
@@ -641,16 +571,13 @@ class lcao:
         cell = self.cell
         atoms = self.atoms
         origin = atoms[0] # first atom
-        supercell_vectors = self._supercell_vectors
+        supercell_vectors = self._supercell_vector_list
         nvectors = len(supercell_vectors)
         
         # Grid information
-        na = self.na
-        nb = self.nb
-        nc = self.nc
-        xgrid = self._xgrid
-        ygrid = self._ygrid
-        zgrid = self._zgrid        
+        na = int(mesh[0])
+        nb = int(mesh[1])
+        nc = int(mesh[2])
 
         # Parallelization ( Developing .. )
 
@@ -672,9 +599,9 @@ class lcao:
                         print('[ %d %d %d grid ]\n' %(ix+1,iy+1,iz+1))
                         print("time :", time.time() - start)
                         position_vector = np.zeros((3), dtype = float)
-                        position_vector[0] = xgrid[ix][iy][iz]
-                        position_vector[1] = ygrid[ix][iy][iz]
-                        position_vector[2] = zgrid[ix][iy][iz]                    
+                        position_vector[0] = xgrid[0][ix][iy][iz]
+                        position_vector[1] = ygrid[0][ix][iy][iz]
+                        position_vector[2] = zgrid[0][ix][iy][iz]
                         list_target_io = tar['orbital_index']
                         number_of_target = len(list_target_io)
                         buff0 = np.zeros((nenergy, number_of_target), dtype = float)
@@ -762,13 +689,5 @@ class lcao:
                         
 
         self.pldos = pldos
-
-        # write cube files
-        for itar in range(len(select)):
-            for ie in range(nenergy):
-                target_orbital_index = select[itar]
-                target_energy = energys[ie]
-                file_name = target_orbital_index + '_%2.5f_eV.cube' % target_energy
-                data = pldos[itar][ie]
-                self._writeCube(file_name, data)
+        return pldos
         
