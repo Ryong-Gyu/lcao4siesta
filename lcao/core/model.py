@@ -16,10 +16,19 @@ phi_tolerance = 1.0e-10
 
 
 class LcaoProjector:
-    def __init__(self, system='Carbon', dm_file=None, ion_files=None):
+    def __init__(self, system='Carbon', dm_file=None, ion_files=None, strict_orbital_metadata=True):
         self._system = system
         self._dm_file = dm_file if dm_file is not None else self._system + '.DM'
         self._ion_files = ion_files
+        self._strict_orbital_metadata = strict_orbital_metadata
+        self._orbital_metadata_validation = {
+            'status': 'not_checked',
+            'key_type': None,
+            'strict': strict_orbital_metadata,
+            'matched_count': 0,
+            'mismatched_count': 0,
+            'first_mismatch': None,
+        }
 
         self._target = []
         self._readDM()
@@ -83,7 +92,7 @@ class LcaoProjector:
         self._hsx_orbital_ml = results[11]
         self._hsx_orbital_zeta = results[12]
         self._validate_hsx_species_metadata()
-        self._cross_check_orbital_metadata()
+        self._validate_orbital_metadata_consistency()
 
     def _build_species_id_to_label(self):
         mapping = {}
@@ -148,10 +157,16 @@ class LcaoProjector:
             return self.species_id_to_label[species_id]
         return symbol
 
-    def _cross_check_orbital_metadata(self):
-        required_orb = ('atom_index', 'orbital_n', 'orbital_l', 'orbital_ml', 'orbital_zeta')
-        if not all(hasattr(self, field) for field in required_orb):
-            return
+    def _validate_orbital_metadata_consistency(self):
+        required_orb = (
+            'orbital_io',
+            'atom_index',
+            'orbital_iao',
+            'orbital_n',
+            'orbital_l',
+            'orbital_ml',
+            'orbital_zeta',
+        )
         required_hsx = (
             '_hsx_atom_index',
             '_hsx_orbital_n',
@@ -159,22 +174,104 @@ class LcaoProjector:
             '_hsx_orbital_ml',
             '_hsx_orbital_zeta',
         )
+
+        if not all(hasattr(self, field) for field in required_orb):
+            return
         if not all(hasattr(self, field) for field in required_hsx):
             return
 
-        for orb_field, hsx_field in (
-            ('atom_index', '_hsx_atom_index'),
-            ('orbital_n', '_hsx_orbital_n'),
-            ('orbital_l', '_hsx_orbital_l'),
-            ('orbital_ml', '_hsx_orbital_ml'),
-            ('orbital_zeta', '_hsx_orbital_zeta'),
-        ):
-            orb_values = getattr(self, orb_field)
-            hsx_values = getattr(self, hsx_field)
-            if len(orb_values) != len(hsx_values):
-                raise ValueError(f'ORB_INDX/HSX mismatch for {orb_field}: {len(orb_values)} != {len(hsx_values)}')
-            if np.any(orb_values != hsx_values):
-                raise ValueError(f'ORB_INDX/HSX mismatch detected for {orb_field}')
+        orb_count = len(self.orbital_io)
+        hsx_count = len(self._hsx_atom_index)
+        nrows = min(orb_count, hsx_count)
+
+        hsx_iao = np.zeros(hsx_count, dtype=int)
+        atom_orbital_counter = {}
+        for idx, ia in enumerate(self._hsx_atom_index):
+            ia = int(ia)
+            atom_orbital_counter[ia] = atom_orbital_counter.get(ia, 0) + 1
+            hsx_iao[idx] = atom_orbital_counter[ia]
+
+        orb_full_keys = [
+            (
+                int(self.orbital_io[i]),
+                int(self.atom_index[i]),
+                int(self.orbital_n[i]),
+                int(self.orbital_l[i]),
+                int(self.orbital_ml[i]),
+                int(self.orbital_zeta[i]),
+            )
+            for i in range(nrows)
+        ]
+        hsx_full_keys = [
+            (
+                i + 1,
+                int(self._hsx_atom_index[i]),
+                int(self._hsx_orbital_n[i]),
+                int(self._hsx_orbital_l[i]),
+                int(self._hsx_orbital_ml[i]),
+                int(self._hsx_orbital_zeta[i]),
+            )
+            for i in range(nrows)
+        ]
+
+        orb_min_keys = [
+            (int(self.orbital_io[i]), int(self.atom_index[i]), int(self.orbital_iao[i]))
+            for i in range(nrows)
+        ]
+        hsx_min_keys = [(i + 1, int(self._hsx_atom_index[i]), int(hsx_iao[i])) for i in range(nrows)]
+
+        full_mismatch_indices = [i for i in range(nrows) if orb_full_keys[i] != hsx_full_keys[i]]
+        if full_mismatch_indices:
+            key_type = '(io, ia, iao)'
+            mismatch_indices = [i for i in range(nrows) if orb_min_keys[i] != hsx_min_keys[i]]
+            compared_orb = orb_min_keys
+            compared_hsx = hsx_min_keys
+        else:
+            key_type = '(io, ia, n, l, m, z)'
+            mismatch_indices = full_mismatch_indices
+            compared_orb = orb_full_keys
+            compared_hsx = hsx_full_keys
+
+        first_mismatch = None
+        if mismatch_indices:
+            first = mismatch_indices[0]
+            first_mismatch = {
+                'index0': int(first),
+                'io': int(first + 1),
+                'orb_indx': compared_orb[first],
+                'hsx': compared_hsx[first],
+            }
+        if orb_count != hsx_count and first_mismatch is None:
+            first_mismatch = {
+                'index0': int(nrows),
+                'io': int(nrows + 1),
+                'orb_indx': 'missing' if nrows >= orb_count else compared_orb[nrows],
+                'hsx': 'missing' if nrows >= hsx_count else compared_hsx[nrows],
+            }
+
+        mismatched_count = len(mismatch_indices) + abs(orb_count - hsx_count)
+        matched_count = nrows - len(mismatch_indices)
+        self._orbital_metadata_validation = {
+            'status': 'match' if mismatched_count == 0 else 'mismatch',
+            'key_type': key_type,
+            'strict': self._strict_orbital_metadata,
+            'matched_count': int(matched_count),
+            'mismatched_count': int(mismatched_count),
+            'first_mismatch': first_mismatch,
+        }
+
+        if mismatched_count == 0:
+            return
+
+        mismatch_message = (
+            'ORB_INDX/HSX orbital metadata mismatch: '
+            f'key={key_type}, matched={matched_count}, mismatched={mismatched_count}, '
+            f'first_mismatch={first_mismatch}. '
+            'Falling back to ORB_INDX metadata.'
+        )
+        if self._strict_orbital_metadata:
+            raise ValueError(mismatch_message)
+        warnings.warn(mismatch_message, stacklevel=2)
 
     def _readIon(self):
         self.ions = {}
