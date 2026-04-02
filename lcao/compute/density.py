@@ -29,7 +29,15 @@ def _orbital_value_at_position(projector, io, position_vector, supercell_vectors
         xji = -(target_position - position_vector + vector)
         radius = np.sqrt(xji.dot(xji))
 
-        phir = projector.Rnl(atom_symbol, target_n, target_l, target_z, radius)
+        phir = projector.Rnl(
+            atom_symbol,
+            target_n,
+            target_l,
+            target_z,
+            radius,
+            io=io + 1,
+            ia=projector.atom_index[io],
+        )
         if abs(phir) < phi_tolerance:
             continue
 

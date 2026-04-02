@@ -123,7 +123,15 @@ def orbital_projected_local_density_of_state(projector, select, energys, cell, m
                                 xji = -(target_vector + supercell_vectors[iv])
                                 phase = np.inner(kpt[ik], xji)
                                 r = np.sqrt(xji.dot(xji))
-                                phir = projector.Rnl(atom_symbol, target_n, target_l, target_z, r)
+                                phir = projector.Rnl(
+                                    atom_symbol,
+                                    target_n,
+                                    target_l,
+                                    target_z,
+                                    r,
+                                    io=io1 + 1,
+                                    ia=index[io1],
+                                )
 
                                 if phir < phi_tolerance:
                                     factor = 0
