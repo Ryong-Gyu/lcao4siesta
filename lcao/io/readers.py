@@ -15,6 +15,10 @@ def read_hsx(path):
     return siesta.readHSX(path)
 
 
+def read_orb_indx(path):
+    return siesta.readORB_INDX(path)
+
+
 def read_struct():
     return siesta.readStruct()
 

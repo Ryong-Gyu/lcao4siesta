@@ -4,7 +4,7 @@ from lcao.core.model import overlap_tolerance
 
 
 def orbital_mask(projector, select):
-    label = projector._atom_symbol
+    label = projector.atom_species
     za = projector.atom_index
     zn = projector.orbital_n
     zl = projector.orbital_l
@@ -36,7 +36,7 @@ def orbital_mask(projector, select):
 
                 if len(indexes) >= 4:
                     atom_m = int(indexes[3])
-                    ibuff = [i for i in ibuff if zx[i] == atom_m + zl[i] + 1]
+                    ibuff = [i for i in ibuff if zx[i] == atom_m]
 
                     if len(indexes) == 5:
                         atom_zeta = int(indexes[4])
@@ -55,7 +55,7 @@ def orbital_mask(projector, select):
             m_ia[i] = za[idx]
             m_izn[i] = zn[idx]
             m_izl[i] = zl[idx]
-            m_izm[i] = zx[idx] - zl[idx] - 1
+            m_izm[i] = zx[idx]
             m_izz[i] = zz[idx]
 
         projector._target.append({

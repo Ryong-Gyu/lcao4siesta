@@ -1,4 +1,5 @@
 import glob
+import os
 import struct
 
 from pysiesta.utils.fortranfile import FortranFile
@@ -91,6 +92,70 @@ def readDM(fname):
     f.close()
 
     return nb, ns, numd, listdptr, listd, dm
+
+
+def readORB_INDX(path):
+    """Read SIESTA text ORB_INDX file.
+
+    The parser follows the column order produced by ``write_orb_indx.f90``:
+    ``io, ia, is, spec, iao, n, l, m, z, ...``.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f'ORB_INDX file not found: {path}')
+
+    io = []
+    ia = []
+    ispec = []
+    spec = []
+    iao = []
+    n = []
+    l = []
+    m = []
+    z = []
+
+    with open(path, 'r') as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            if ' = orbitals in unit cell and supercell' in line:
+                continue
+            if line.startswith('Column codes:'):
+                break
+            if line.startswith('io') or line.startswith('isc') or line.startswith('iuo'):
+                continue
+
+            cols = line.split()
+            if len(cols) < 10:
+                continue
+
+            try:
+                io.append(int(cols[0]))
+                ia.append(int(cols[1]))
+                ispec.append(int(cols[2]))
+                spec.append(cols[3])
+                iao.append(int(cols[4]))
+                n.append(int(cols[5]))
+                l.append(int(cols[6]))
+                m.append(int(cols[7]))
+                z.append(int(cols[8]))
+            except ValueError:
+                continue
+
+    if len(io) == 0:
+        raise ValueError(f'No orbital records parsed from ORB_INDX file: {path}')
+
+    return (
+        np.array(io, dtype=int),
+        np.array(ia, dtype=int),
+        np.array(ispec, dtype=int),
+        np.array(spec),
+        np.array(iao, dtype=int),
+        np.array(n, dtype=int),
+        np.array(l, dtype=int),
+        np.array(m, dtype=int),
+        np.array(z, dtype=int),
+    )
 
 
 # TODO

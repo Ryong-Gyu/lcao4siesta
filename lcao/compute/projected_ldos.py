@@ -34,7 +34,7 @@ def orbital_projected_local_density_of_state(projector, select, energys, cell, m
     eig = projector.eigenvalue
 
     index = projector.atom_index
-    symbol = projector._atom_symbol
+    symbol = projector.atom_species
 
     target = projector._target
     list_io = projector._projection_io
