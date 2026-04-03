@@ -77,7 +77,86 @@ class LcaoProjector:
         self.orbital_zeta = results[8]
         self.supercell_orbital_io = results[9]
         self.supercell_orbital_iuo = results[10]
+        self.supercell_orbital_isc = results[11]
+        self.io_all = self.supercell_orbital_io
+        self.iuo_all = self.supercell_orbital_iuo
+        self.isc_all = self.supercell_orbital_isc
+        self.dm_io_domain = np.arange(1, self.dm_nb + 1, dtype=int)
+        if len(self.orbital_io) < self.dm_nb:
+            raise ValueError(
+                f'ORB_INDX unit-cell orbital count ({len(self.orbital_io)}) '
+                f'is smaller than DM basis size ({self.dm_nb}).'
+            )
+        self.dm_orbital_io = self.orbital_io[: self.dm_nb]
+        if not np.array_equal(self.dm_orbital_io, self.dm_io_domain):
+            raise ValueError(
+                'DM io-domain definition mismatch: expected ORB_INDX unit-cell io '
+                f'to be 1..dm_nb (1..{self.dm_nb}), got first/last='
+                f'{int(self.dm_orbital_io[0])}..{int(self.dm_orbital_io[self.dm_nb - 1])}.'
+            )
+        self.dm_orbital_iuo = self.supercell_orbital_iuo[: self.dm_nb]
         self.species_id_to_label = self._build_species_id_to_label()
+
+    def _build_io_metadata_maps(self):
+        if not hasattr(self, 'cell') or not hasattr(self, 'atoms'):
+            self._readStruct()
+
+        canonical_center_by_iuo = {}
+        canonical_symbol_by_iuo = {}
+        canonical_n_by_iuo = {}
+        canonical_l_by_iuo = {}
+        canonical_m_by_iuo = {}
+        canonical_zeta_by_iuo = {}
+
+        for idx, io_value in enumerate(self.orbital_io):
+            iuo = int(io_value)
+            atom_index = int(self.atom_index[idx]) - 1
+            canonical_center_by_iuo[iuo] = np.array(self.atoms[atom_index], dtype=float)
+            canonical_symbol_by_iuo[iuo] = self.atom_species[idx]
+            canonical_n_by_iuo[iuo] = int(self.orbital_n[idx])
+            canonical_l_by_iuo[iuo] = int(self.orbital_l[idx])
+            canonical_m_by_iuo[iuo] = int(self.orbital_ml[idx])
+            canonical_zeta_by_iuo[iuo] = int(self.orbital_zeta[idx])
+
+        io_to_iuo = {}
+        io_to_isc = {}
+        io_to_center = {}
+        for io_value, iuo_value, isc_value in zip(self.io_all, self.iuo_all, self.isc_all):
+            io_int = int(io_value)
+            iuo_int = int(iuo_value)
+            isc_vec = np.array(isc_value, dtype=int)
+            if iuo_int not in canonical_center_by_iuo:
+                raise ValueError(
+                    f'ORB_INDX iuo={iuo_int} (referenced by io={io_int}) is missing in unit-cell metadata.'
+                )
+            center_iuo = canonical_center_by_iuo[iuo_int]
+            center_io = (
+                center_iuo
+                + float(isc_vec[0]) * self.cell[0]
+                + float(isc_vec[1]) * self.cell[1]
+                + float(isc_vec[2]) * self.cell[2]
+            )
+            io_to_iuo[io_int] = iuo_int
+            io_to_isc[io_int] = isc_vec
+            io_to_center[io_int] = center_io
+
+        self.io_to_iuo = io_to_iuo
+        self.io_to_isc = io_to_isc
+        self.io_to_center_io = io_to_center
+        self.iuo_to_center = canonical_center_by_iuo
+        self.iuo_to_symbol = canonical_symbol_by_iuo
+        self.iuo_to_n = canonical_n_by_iuo
+        self.iuo_to_l = canonical_l_by_iuo
+        self.iuo_to_m = canonical_m_by_iuo
+        self.iuo_to_zeta = canonical_zeta_by_iuo
+
+        self.dm_center_io = np.zeros((self.dm_nb, 3), dtype=float)
+        self.dm_orbital_isc = np.zeros((self.dm_nb, 3), dtype=int)
+        for idx, io_value in enumerate(self.dm_io_domain):
+            iuo = self.io_to_iuo[int(io_value)]
+            self.dm_center_io[idx] = self.io_to_center_io[int(io_value)]
+            self.dm_orbital_iuo[idx] = iuo
+            self.dm_orbital_isc[idx] = self.io_to_isc[int(io_value)]
 
     def _readHSX(self):
         file_name = self._system + '.HSX'
@@ -342,6 +421,8 @@ class LcaoProjector:
                 self._readStruct()
             if not hasattr(self, '_supercell_vector_list'):
                 self._build_supercell_vectors()
+            if hasattr(self, 'io_all') and not hasattr(self, 'dm_center_io'):
+                self._build_io_metadata_maps()
             for field in ('cell', 'atoms', 'species', '_supercell_vector_list'):
                 if not hasattr(self, field):
                     raise ValueError(f'Missing required field: {field}')
@@ -366,6 +447,8 @@ class LcaoProjector:
                 raise ValueError(
                     f'ORB_INDX orbital count ({len(self.atom_index)}) does not match DM basis size ({self.dm_nb})'
                 )
+            if hasattr(self, 'cell') and not hasattr(self, 'dm_center_io'):
+                self._build_io_metadata_maps()
 
     def delta(self, x):
         if abs(x) > 8 * smearing:
