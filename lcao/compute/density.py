@@ -89,6 +89,13 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
         file_path=f'{projector._system}.ORB_INDX',
     )
     target_z = projector.iuo_to_zeta[iuo]
+    validate_signed_orbital_m(
+        target_m,
+        target_l,
+        source='ORB_INDX',
+        orbital_index=iuo,
+        file_path=f'{projector._system}.ORB_INDX',
+    )
 
     value = 0.0 + 0.0j
     for vector in supercell_vectors:
@@ -107,13 +114,6 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
         if abs(phir) < phi_tolerance:
             continue
 
-        validate_signed_orbital_m(
-            target_m,
-            target_l,
-            source='ORB_INDX',
-            orbital_index=iuo,
-            file_path=f'{projector._system}.ORB_INDX',
-        )
         spherical = projector.Yml(xji, target_m, target_l)
         value += phir * spherical
 
