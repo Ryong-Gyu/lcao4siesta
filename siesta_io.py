@@ -178,6 +178,7 @@ def readORB_INDX(path):
     l = []
     m = []
     z = []
+    orbital_iuo = []
     io_all = []
     iuo_all = []
     isc_all = []
@@ -215,9 +216,12 @@ def readORB_INDX(path):
                 l.append(int(cols[6]))
                 m.append(int(cols[7]))
                 z.append(int(cols[8]))
+                iuo_value = int(cols[-1])
+                isc_value = [int(cols[-4]), int(cols[-3]), int(cols[-2])]
+                orbital_iuo.append(iuo_value)
                 io_all.append(io_value)
-                isc_all.append([int(cols[-4]), int(cols[-3]), int(cols[-2])])
-                iuo_all.append(int(cols[-1]))
+                isc_all.append(isc_value)
+                iuo_all.append(iuo_value)
             except ValueError:
                 continue
 
@@ -240,6 +244,7 @@ def readORB_INDX(path):
         np.array(l, dtype=int)[unit_mask],
         np.array(m, dtype=int)[unit_mask],
         np.array(z, dtype=int)[unit_mask],
+        np.array(orbital_iuo, dtype=int)[unit_mask],
         np.array(io_all, dtype=int),
         np.array(iuo_all, dtype=int),
         np.array(isc_all, dtype=int),

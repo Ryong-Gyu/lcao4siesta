@@ -75,9 +75,10 @@ class LcaoProjector:
         self.orbital_l = results[6]
         self.orbital_ml = results[7]
         self.orbital_zeta = results[8]
-        self.supercell_orbital_io = results[9]
-        self.supercell_orbital_iuo = results[10]
-        self.supercell_orbital_isc = results[11]
+        self.orbital_iuo = results[9]
+        self.supercell_orbital_io = results[10]
+        self.supercell_orbital_iuo = results[11]
+        self.supercell_orbital_isc = results[12]
         self.io_all = self.supercell_orbital_io
         self.iuo_all = self.supercell_orbital_iuo
         self.isc_all = self.supercell_orbital_isc
@@ -94,7 +95,7 @@ class LcaoProjector:
                 f'to be 1..dm_nb (1..{self.dm_nb}), got first/last='
                 f'{int(self.dm_orbital_io[0])}..{int(self.dm_orbital_io[self.dm_nb - 1])}.'
             )
-        self.dm_orbital_iuo = self.supercell_orbital_iuo[: self.dm_nb]
+        self.dm_orbital_iuo = self.orbital_iuo[: self.dm_nb]
         self.species_id_to_label = self._build_species_id_to_label()
 
     def _build_io_metadata_maps(self):
@@ -108,8 +109,8 @@ class LcaoProjector:
         canonical_m_by_iuo = {}
         canonical_zeta_by_iuo = {}
 
-        for idx, io_value in enumerate(self.orbital_io):
-            iuo = int(io_value)
+        for idx, iuo_value in enumerate(self.orbital_iuo):
+            iuo = int(iuo_value)
             atom_index = int(self.atom_index[idx]) - 1
             canonical_center_by_iuo[iuo] = np.array(self.atoms[atom_index], dtype=float)
             canonical_symbol_by_iuo[iuo] = self.atom_species[idx]
@@ -437,6 +438,7 @@ class LcaoProjector:
                 'orbital_l',
                 'orbital_ml',
                 'orbital_zeta',
+                'orbital_iuo',
                 'orbital_io',
                 'orbital_iao',
             )
