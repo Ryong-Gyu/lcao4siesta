@@ -112,29 +112,27 @@ def _dm_columns_zero_based(projector):
     )
 
 
-def _orbital_value_at_position(projector, io, position_vector, supercell_vectors):
-    atom_symbol = projector.atom_species[io]
-    atom_index = projector.atom_index[io] - 1
+def _orbital_value_at_position(projector, io, center_io, position_vector, supercell_vectors):
+    iuo = int(projector.dm_orbital_iuo[io])
+    atom_symbol = projector.iuo_to_symbol[iuo]
 
-    target_n = projector.orbital_n[io]
-    target_l = projector.orbital_l[io]
+    target_n = projector.iuo_to_n[iuo]
+    target_l = projector.iuo_to_l[iuo]
     # ORB_INDX magnetic quantum number encoding:
     # - signed: m in [-l, ..., +l] (use directly)
     # - legacy: ml in [1, ..., 2l+1] (convert by ml - l - 1)
     target_m = normalize_orbital_m(
-        projector.orbital_ml[io],
+        projector.iuo_to_m[iuo],
         target_l,
         source='ORB_INDX',
-        orbital_index=io + 1,
+        orbital_index=iuo,
         file_path=f'{projector._system}.ORB_INDX',
     )
-    target_z = projector.orbital_zeta[io]
-
-    target_position = projector.atoms[atom_index]
+    target_z = projector.iuo_to_zeta[iuo]
 
     value = 0.0 + 0.0j
     for vector in supercell_vectors:
-        xji = -(target_position - position_vector + vector)
+        xji = -(center_io - position_vector + vector)
         radius = np.sqrt(xji.dot(xji))
 
         phir = projector.Rnl(
@@ -144,7 +142,7 @@ def _orbital_value_at_position(projector, io, position_vector, supercell_vectors
             target_z,
             radius,
             io=io + 1,
-            ia=projector.atom_index[io],
+            ia=None,
         )
         if abs(phir) < phi_tolerance:
             continue
@@ -153,7 +151,7 @@ def _orbital_value_at_position(projector, io, position_vector, supercell_vectors
             target_m,
             target_l,
             source='ORB_INDX',
-            orbital_index=io + 1,
+            orbital_index=iuo,
             file_path=f'{projector._system}.ORB_INDX',
         )
         spherical = projector.Yml(xji, target_m, target_l)
@@ -196,7 +194,13 @@ def electron_density(projector, cell, mesh):
 
         phi = np.zeros((nbasis), dtype=np.complex128)
         for io in range(nbasis):
-            phi[io] = _orbital_value_at_position(projector, io, position_vector, supercell_vectors)
+            phi[io] = _orbital_value_at_position(
+                projector,
+                io,
+                projector.dm_center_io[io],
+                position_vector,
+                supercell_vectors,
+            )
 
         density_value = np.zeros((nspin), dtype=np.float64)
         _accumulate_density_from_pairs(phi, dm_mu, dm_nu, dm_unique, pair_factor, density_value)
