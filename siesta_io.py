@@ -7,6 +7,32 @@ import numpy as np
 
 from pysiesta.utils import units
 
+INTERNAL_LENGTH_UNIT = 'Bohr'
+BOHR_TO_ANG = float(units.bohr2ang)
+ANG_TO_BOHR = 1.0 / BOHR_TO_ANG
+
+
+def _normalize_length_unit(unit_token):
+    token = unit_token.strip().lower()
+    aliases = {
+        'bohr': 'bohr',
+        'bohrs': 'bohr',
+        'ang': 'ang',
+        'angs': 'ang',
+        'angstrom': 'ang',
+        'angstroms': 'ang',
+    }
+    if token not in aliases:
+        raise ValueError(f'Unsupported length unit token: {unit_token}')
+    return aliases[token]
+
+
+def _to_bohr(length_values, from_unit):
+    normalized = _normalize_length_unit(from_unit)
+    if normalized == 'bohr':
+        return np.asarray(length_values, dtype=float)
+    return np.asarray(length_values, dtype=float) * ANG_TO_BOHR
+
 
 def readGrid(fname):
 
@@ -657,7 +683,8 @@ def readIon(fname):
 
             npts = int(word[0])
             delta = float(word[1])
-            cutoff = float(word[2]) * units.bohr2ang  # convert unit!
+            # SIESTA ion radial tables are defined in Bohr.
+            cutoff = float(word[2])
             r = np.zeros((npts), dtype=np.float64)
             phi = np.zeros((npts), dtype=np.float64)
 
@@ -665,7 +692,7 @@ def readIon(fname):
                 line = f.readline()
                 word = line.split()
 
-                r[ir] = np.float64(word[0]) * units.bohr2ang  # convert unit!
+                r[ir] = np.float64(word[0])
                 phi[ir] = np.float64(word[1])
 
             if n in pao_basis.keys():
@@ -674,17 +701,20 @@ def readIon(fname):
                         pao_basis[n][l][z].update({'phi': phi})
                         pao_basis[n][l][z].update({'r': r})
                         pao_basis[n][l][z].update({'cutoff': cutoff})
+                        pao_basis[n][l][z].update({'length_unit': 'bohr'})
                     else:
                         pao_basis[n][l].update({z: {}})
                         pao_basis[n][l][z].update({'phi': phi})
                         pao_basis[n][l][z].update({'r': r})
                         pao_basis[n][l][z].update({'cutoff': cutoff})
+                        pao_basis[n][l][z].update({'length_unit': 'bohr'})
                 else:
                     pao_basis[n].update({l: {}})
                     pao_basis[n][l].update({z: {}})
                     pao_basis[n][l][z].update({'phi': phi})
                     pao_basis[n][l][z].update({'r': r})
                     pao_basis[n][l][z].update({'cutoff': cutoff})
+                    pao_basis[n][l][z].update({'length_unit': 'bohr'})
             else:
                 pao_basis.update({n: {}})
                 pao_basis[n].update({l: {}})
@@ -692,6 +722,7 @@ def readIon(fname):
                 pao_basis[n][l][z].update({'phi': phi})
                 pao_basis[n][l][z].update({'r': r})
                 pao_basis[n][l][z].update({'cutoff': cutoff})
+                pao_basis[n][l][z].update({'length_unit': 'bohr'})
 
         f.close()
 
@@ -702,6 +733,9 @@ def readStruct():
     struct_file = glob.glob('STRUCT.fdf')[0]
 
     CELL = np.zeros((3, 3), dtype=float)
+    lattice_constant = None
+    lattice_constant_unit = 'ang'
+    atomic_coordinates_format = None
 
     with open(struct_file) as f:
         for i, l in enumerate(f):
@@ -715,6 +749,8 @@ def readStruct():
                     number_of_species = int(word[1])
                 if word[0] == 'LatticeConstant':
                     lattice_constant = float(word[1])
+                    if len(word) >= 3:
+                        lattice_constant_unit = _normalize_length_unit(word[2])
                 if line.strip() == '%block ChemicalSpeciesLabel':
                     species = np.zeros((number_of_species), dtype=int)
                     for ispec in range(number_of_species):
@@ -728,12 +764,12 @@ def readStruct():
                         CELL[ix][0] = cell_vals[0]
                         CELL[ix][1] = cell_vals[1]
                         CELL[ix][2] = cell_vals[2]
+                    if lattice_constant is None:
+                        raise ValueError('LatticeConstant must be defined before %block LatticeVectors')
                     CELL = CELL * lattice_constant
+                    CELL = _to_bohr(CELL, lattice_constant_unit)
                 if word[0] == 'AtomicCoordinatesFormat':
-                    if word[1] == 'ScaledCartesian':
-                        parameter = lattice_constant
-                    elif word[1] == 'Ang':
-                        parameter = 1
+                    atomic_coordinates_format = word[1].strip().lower()
                 if line.strip() == '%block AtomicCoordinatesAndAtomicSpecies':
                     SPEC = np.zeros((number_of_atoms), dtype=int)
                     ATOMS = np.zeros((number_of_atoms, 3), dtype=float)
@@ -745,7 +781,26 @@ def readStruct():
                         ATOMS[ia][2] = atom_coord[2]
                         SPEC[ia] = species[int(atom_coord[3]) - 1]
 
-                    ATOMS = ATOMS * parameter
+                    if atomic_coordinates_format is None:
+                        raise ValueError('AtomicCoordinatesFormat must be defined before atomic coordinates block')
+                    if lattice_constant is None:
+                        raise ValueError('LatticeConstant must be defined before atomic coordinates block')
+
+                    if atomic_coordinates_format == 'scaledcartesian':
+                        atoms_in_lc_unit = ATOMS * lattice_constant
+                        ATOMS = _to_bohr(atoms_in_lc_unit, lattice_constant_unit)
+                    elif atomic_coordinates_format in ('ang', 'angstrom'):
+                        ATOMS = _to_bohr(ATOMS, 'ang')
+                    elif atomic_coordinates_format == 'bohr':
+                        ATOMS = _to_bohr(ATOMS, 'bohr')
+                    elif atomic_coordinates_format in ('fractional', 'scaledbylatticevectors'):
+                        ATOMS = ATOMS @ CELL
+                    else:
+                        raise ValueError(
+                            'Unsupported AtomicCoordinatesFormat: '
+                            f'{atomic_coordinates_format} '
+                            '(expected ScaledCartesian/Ang/Bohr/Fractional/ScaledByLatticeVectors)'
+                        )
 
     return CELL, ATOMS, SPEC
 
