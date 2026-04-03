@@ -195,6 +195,8 @@ def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_
 
             idx2 = int(active_phi_pos[io2])
             phi2 = phi_active[idx2]
+            # With real spherical harmonics, phi values are real and the
+            # density contribution uses a plain product.
             pair_product = (phi1 * phi2).real
             factor = 1.0 if io1 == io2 else 2.0
             weighted_pair = factor * pair_product

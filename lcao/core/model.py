@@ -489,24 +489,30 @@ class LcaoProjector:
         cutoff_radius = pao_basis['cutoff']
         if r < cutoff_radius:
             f_phi = interp1d(pao_basis['r'], pao_basis['phi'])
-            return f_phi(r)
-        return 0
+            return f_phi(r) * (r ** l)
+        return 0.0
 
     def Yml(self, vector, m, l):
         x, y, z = vector
         r2 = vector ** 2
         r = np.sqrt(sum(r2))
         if r < 1.0e-20:
-            # Match SIESTA's tiny-radius safeguard in all_phi/rlylm path.
-            # At r≈0, angular coordinates are undefined; choosing (theta,phi)=0
-            # avoids NaNs while radial factors control the physical limit.
             phi = 0.0
             theta = 0.0
-            return scipy.special.sph_harm(m, l, theta, phi)
+        else:
+            phi = np.arccos(z / r)
+            theta = np.arctan2(y, x)
+            if theta <= 0:
+                theta = theta + 2 * pi
 
-        phi = np.arccos(z / r)
-        theta = np.arctan2(y, x) + pi
-        return scipy.special.sph_harm(m, l, theta, phi)
+        # Keep the same real-harmonic convention as the original implementation:
+        #   m>0: sqrt(2)*Re(Y_l^{|m|}), m=0: Re(Y_l^0), m<0: sqrt(2)*Im(Y_l^{|m|})
+        ylm_complex = scipy.special.sph_harm(abs(m), l, theta, phi)
+        if m > 0:
+            return np.sqrt(2.0) * ylm_complex.real
+        if m < 0:
+            return np.sqrt(2.0) * ylm_complex.imag
+        return ylm_complex.real
 
     def unit_cell_grid(self, cell, mesh):
         cell = np.array(cell)
