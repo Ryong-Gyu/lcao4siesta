@@ -13,6 +13,7 @@ pi = np.pi
 smearing = 0.2
 overlap_tolerance = 1.0e-10
 phi_tolerance = 1.0e-10
+INTERNAL_LENGTH_UNIT = 'bohr'
 
 
 class LcaoProjector:
@@ -29,6 +30,7 @@ class LcaoProjector:
             'mismatched_count': 0,
             'first_mismatch': None,
         }
+        self._length_unit = INTERNAL_LENGTH_UNIT
 
         self._target = []
         self._readDM()
@@ -377,6 +379,11 @@ class LcaoProjector:
         return np.sqrt(square)
 
     def Rnl(self, symbol, n, l, zeta, r, *, io=None, ia=None):
+        if self._length_unit != INTERNAL_LENGTH_UNIT:
+            raise ValueError(
+                f'Unexpected internal length unit state: {self._length_unit}. '
+                f'Expected {INTERNAL_LENGTH_UNIT}.'
+            )
         atom_symbol = self._normalize_atom_symbol(symbol, io=io, ia=ia)
         if atom_symbol not in self.ions:
             raise KeyError(
@@ -384,6 +391,18 @@ class LcaoProjector:
                 f'io={io}, ia={ia}: species id/label={symbol}/{atom_symbol}'
             )
         pao_basis = self.ions[atom_symbol][n][l][zeta]
+        pao_unit = pao_basis.get('length_unit')
+        if pao_unit is None:
+            raise ValueError(
+                'Missing PAO length unit metadata for orbital table at '
+                f'io={io}, ia={ia}, symbol={atom_symbol}, (n,l,zeta)=({n},{l},{zeta}).'
+            )
+        if str(pao_unit).lower() != INTERNAL_LENGTH_UNIT:
+            raise ValueError(
+                'Length-unit mismatch between projector and PAO table: '
+                f'projector={INTERNAL_LENGTH_UNIT}, pao={pao_unit}, '
+                f'io={io}, ia={ia}, symbol={atom_symbol}, (n,l,zeta)=({n},{l},{zeta}), r={r}.'
+            )
         cutoff_radius = pao_basis['cutoff']
         if r < cutoff_radius:
             f_phi = interp1d(pao_basis['r'], pao_basis['phi'])
