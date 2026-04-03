@@ -4,6 +4,15 @@ from lcao.compute.kernels import build_mesh_positions
 from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - optional dependency
+    def njit(*args, **kwargs):
+        def _decorator(func):
+            return func
+
+        return _decorator
+
 
 def _io_cutoff_radius_from_pao(projector, io):
     """Return PAO cutoff radius for a DM orbital io, using io->iuo metadata only."""
@@ -158,18 +167,12 @@ def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_
     return phi_active
 
 
-def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
-    """Accumulate rho from sparse DM, limited to active io pairs only.
-
-    Symmetry handling follows rhoofd.F90 upper-triangular accumulation:
-    keep io1 <= io2 pairs, apply factor 2.0 for off-diagonal terms.
-    """
-    nspin = projector.dm_ns
+@njit(cache=True)
+def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active_real, nspin, nbasis):
     density_value = np.zeros((nspin), dtype=np.float64)
     if active_io.shape[0] == 0:
         return density_value
 
-    nbasis = projector.dm_nb
     active_mask = np.zeros((nbasis), dtype=np.bool_)
     active_phi_pos = np.full((nbasis), -1, dtype=np.int64)
     for idx in range(active_io.shape[0]):
@@ -179,9 +182,9 @@ def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
 
     for idx1 in range(active_io.shape[0]):
         io1 = int(active_io[idx1])
-        row_start = projector.dm_listdptr[io1]
-        row_end = row_start + projector.dm_numd[io1]
-        phi1 = phi_active[idx1]
+        row_start = dm_listdptr[io1]
+        row_end = row_start + dm_numd[io1]
+        phi1 = phi_active_real[idx1]
 
         for ind in range(row_start, row_end):
             io2 = int(dm_columns[ind])
@@ -191,14 +194,32 @@ def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
                 continue
 
             idx2 = int(active_phi_pos[io2])
-            phi2 = phi_active[idx2]
-            pair_product = (phi1 * phi2).real
+            phi2 = phi_active_real[idx2]
+            pair_product = phi1 * phi2
             factor = 1.0 if io1 == io2 else 2.0
             weighted_pair = factor * pair_product
             for isp in range(nspin):
-                density_value[isp] += projector.dm[ind, isp] * weighted_pair
+                density_value[isp] += dm[ind, isp] * weighted_pair
 
     return density_value
+
+
+def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
+    """Accumulate rho from sparse DM, limited to active io pairs only.
+
+    Symmetry handling follows rhoofd.F90 upper-triangular accumulation:
+    keep io1 <= io2 pairs, apply factor 2.0 for off-diagonal terms.
+    """
+    return _accumulate_density_from_pairs(
+        projector.dm,
+        projector.dm_listdptr,
+        projector.dm_numd,
+        dm_columns,
+        active_io,
+        phi_active.real,
+        projector.dm_ns,
+        projector.dm_nb,
+    )
 
 
 def electron_density(projector, cell, mesh):

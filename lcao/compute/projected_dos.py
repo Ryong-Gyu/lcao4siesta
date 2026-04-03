@@ -1,6 +1,6 @@
 import numpy as np
 
-from lcao.compute.kernels import accumulate_overlap_weight, compute_projection_factor
+from lcao.compute.kernels import sum_projection_real_weights
 from lcao.selection.orbital_selector import mask_to_pointer, orbital_mask
 
 
@@ -43,21 +43,25 @@ def orbital_projected_denstiy_of_state(projector, select, energys):
 
     for itar in range(ntarget):
         tar = target[itar]
+        list_target_io = tar['orbital_index']
+        target_projection_io = list_io[itar]
+        target_projection_ptr = list_ptr[itar]
         for ik in range(nkpoints):
             for isp in range(nspin):
                 for iw in range(nwavefunctions):
-                    nprojection = len(list_io[itar])
-                    buff2 = np.zeros((nprojection), dtype=float)
-                    list_target_io = tar['orbital_index']
-                    for io1 in list_target_io:
-                        iio = 0
-                        for io2 in list_io[itar]:
-                            ind = list_ptr[itar][iio]
-                            qcos, qsin = compute_projection_factor(gamma, wf, io1, io2, iw, isp, ik)
-                            real_weight, _ = accumulate_overlap_weight(Sover, xij, kpt[ik], ind, qcos, qsin)
-                            buff2[iio] = real_weight
-                            iio += 1
-                    buff1[itar][ik][iw] = buff2.sum()
+                    buff1[itar][ik][iw] = sum_projection_real_weights(
+                        gamma,
+                        wf,
+                        kpt[ik],
+                        list_target_io,
+                        target_projection_io,
+                        target_projection_ptr,
+                        Sover,
+                        xij,
+                        iw,
+                        isp,
+                        ik,
+                    )
 
                     eigenvalue = eig[iw][isp][ik]
                     for ie in range(nenergy):
