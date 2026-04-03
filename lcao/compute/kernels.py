@@ -58,6 +58,23 @@ def accumulate_overlap_weight(Sover, xij, kpt, ind, qcos, qsin):
     return _accumulate_overlap_phase(Sover[ind], phase, qcos, qsin)
 
 
+def sum_projection_real_weights(gamma, wf, kpt_vector, list_target_io, list_io, list_ptr, Sover, xij, iw, isp, ik):
+    """Return projection-buffer sum for one target on one (k, spin, wavefunction) state.
+
+    Note: this intentionally preserves legacy write/overwrite behavior where
+    the per-projection buffer is overwritten for each `io1` and only the last
+    `io1` values contribute to the returned sum.
+    """
+    projection_buffer = np.zeros((len(list_io)), dtype=float)
+    for io1 in list_target_io:
+        for iio, io2 in enumerate(list_io):
+            ind = list_ptr[iio]
+            qcos, qsin = compute_projection_factor(gamma, wf, io1, io2, iw, isp, ik)
+            real_weight, _ = accumulate_overlap_weight(Sover, xij, kpt_vector, ind, qcos, qsin)
+            projection_buffer[iio] = real_weight
+    return projection_buffer.sum()
+
+
 @njit(cache=True)
 def build_mesh_positions(xgrid0, ygrid0, zgrid0):
     """Flatten `(na, nb, nc)` mesh arrays into `(npoint, 3)` positions."""
