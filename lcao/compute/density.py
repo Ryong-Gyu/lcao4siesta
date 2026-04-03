@@ -168,7 +168,7 @@ def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_
 
 
 @njit(cache=True)
-def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active_real, nspin, nbasis):
+def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active, nspin, nbasis):
     density_value = np.zeros((nspin), dtype=np.float64)
     if active_io.shape[0] == 0:
         return density_value
@@ -184,7 +184,7 @@ def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_
         io1 = int(active_io[idx1])
         row_start = dm_listdptr[io1]
         row_end = row_start + dm_numd[io1]
-        phi1 = phi_active_real[idx1]
+        phi1 = phi_active[idx1]
 
         for ind in range(row_start, row_end):
             io2 = int(dm_columns[ind])
@@ -194,8 +194,8 @@ def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_
                 continue
 
             idx2 = int(active_phi_pos[io2])
-            phi2 = phi_active_real[idx2]
-            pair_product = phi1 * phi2
+            phi2 = phi_active[idx2]
+            pair_product = (phi1 * phi2).real
             factor = 1.0 if io1 == io2 else 2.0
             weighted_pair = factor * pair_product
             for isp in range(nspin):
@@ -216,7 +216,7 @@ def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
         projector.dm_numd,
         dm_columns,
         active_io,
-        phi_active.real,
+        phi_active,
         projector.dm_ns,
         projector.dm_nb,
     )
