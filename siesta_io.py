@@ -40,6 +40,26 @@ def readGrid(fname):
 
     return cell, mesh, rho
 
+def writeGrid(fname, cell, mesh, rho):
+
+    f = fortran.FortranFile(fname, mode = 'wb')
+
+    cell2 = cell.flatten().tolist()
+    f.writeReals(cell2, 'd')
+
+    temp = mesh.tolist()
+    nspin = np.shape(rho)[0]
+    temp.append(nspin)
+
+    f.writeInts(temp,'i')
+
+    for isp in range(nspin):
+        for iz in range(mesh[2]):
+            for iy in range(mesh[1]):
+                f.writeReals(rho[isp,:,iy,iz],'f')
+    f.close()
+
+
 
 def readDM(fname):
     '''
@@ -92,6 +112,24 @@ def readDM(fname):
     f.close()
 
     return nb, ns, numd, listdptr, listd, dm
+
+
+def writeDM(fname, nb, ns, numd, listdptr, listd, dm):
+
+    f = fortran.FortranFile(fname, mode = 'wb')
+    f.writeInts([nb, ns], 'i')
+    f.writeInts(numd, 'i')
+
+    for m in range(nb):
+        n = numd[m]
+        f.writeInts(listd[listdptr[m]:listdptr[m]+n], 'i')
+
+    for isp in range(ns):
+        for m in range(nb):
+            n = numd[m]
+            f.writeReals(dm[listdptr[m]:listdptr[m]+n,isp], 'd')
+    f.close()
+
 
 
 def readORB_INDX(path):
@@ -178,23 +216,6 @@ def readORB_INDX(path):
         np.array(iuo_all, dtype=int),
     )
 
-
-# TODO
-def writeDM(fname, nb, ns, numd, listdptr, listd, dm):
-    f = FortranFile(fname, mode='wb')
-
-    f.writeInts([nb, ns], 'i')
-    f.writeInts(numd, 'i')
-
-    for m in range(nb):
-        n = numd[m]
-        f.writeInts(listd[listdptr[m]:listdptr[m] + n], 'i')
-
-    for isp in range(ns):
-        for m in range(nb):
-            n = numd[m]
-            f.writeReals(dm[listdptr[m]:listdptr[m] + n, isp], 'd')
-    f.close()
 
 
 def readWFSX(fname):
