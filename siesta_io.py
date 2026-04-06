@@ -68,7 +68,7 @@ def readGrid(fname):
 
 def writeGrid(fname, cell, mesh, rho):
 
-    f = fortran.FortranFile(fname, mode = 'wb')
+    f = FortranFile(fname, mode = 'wb')
 
     cell2 = cell.flatten().tolist()
     f.writeReals(cell2, 'd')

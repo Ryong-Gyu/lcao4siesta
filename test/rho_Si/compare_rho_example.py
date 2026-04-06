@@ -11,7 +11,7 @@ model = lcao(
     ion_files={"Si": "Si.ion"},
 )
 gen_rho = model.electron_density(io_cell, io_mesh)
-write_rho("OUT.RHO",io_cell, io_mesh, gen_rho)
+write_rho("OUT.RHO", io_cell, io_mesh, gen_rho)
 
 print("mesh", tuple(io_mesh), "shape", io_rho.shape)
 print("max|Δρ|", float(np.max(np.abs(gen_rho[0] - io_rho[0]))))
