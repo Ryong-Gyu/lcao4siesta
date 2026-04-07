@@ -384,13 +384,38 @@ class LcaoProjector:
                         if cutoff >= max_cutoff:
                             max_cutoff = cutoff
 
-        length_a = self.length(self.cell[0])
-        length_b = self.length(self.cell[1])
-        length_c = self.length(self.cell[2])
+        # NOTE:
+        # For skewed cells, using |a|, |b|, |c| can miss required periodic
+        # images. We must use lattice-plane heights:
+        #   h_a = V / |b x c|, h_b = V / |c x a|, h_c = V / |a x b|
+        # so that shifts in [-na..na], [-nb..nb], [-nc..nc] cover all points
+        # within max_cutoff from the home cell.
+        a = self.cell[0]
+        b = self.cell[1]
+        c = self.cell[2]
+        volume = abs(np.dot(a, np.cross(b, c)))
+        if volume <= 0.0:
+            raise ValueError('Invalid unit cell: zero volume')
 
-        na = int(math.ceil(max_cutoff / length_a))
-        nb = int(math.ceil(max_cutoff / length_b))
-        nc = int(math.ceil(max_cutoff / length_c))
+        height_a = volume / self.length(np.cross(b, c))
+        height_b = volume / self.length(np.cross(c, a))
+        height_c = volume / self.length(np.cross(a, b))
+
+        na = int(math.ceil(max_cutoff / height_a))
+        nb = int(math.ceil(max_cutoff / height_b))
+        nc = int(math.ceil(max_cutoff / height_c))
+
+        # ORB_INDX already carries explicit supercell shifts via ISC:
+        #   center(io) = center(iuo) + sum_i cell_vec(i) * isc(i)
+        # Ensure we never build a translation list smaller than the ORB_INDX
+        # domain, otherwise some DM/HSX couplings may be silently dropped.
+        if not hasattr(self, 'isc_all'):
+            self._readORB_INDX()
+        if hasattr(self, 'isc_all') and len(self.isc_all) > 0:
+            isc_max = np.max(np.abs(np.asarray(self.isc_all, dtype=int)), axis=0)
+            na = max(na, int(isc_max[0]))
+            nb = max(nb, int(isc_max[1]))
+            nc = max(nc, int(isc_max[2]))
 
         nsc = (2 * na + 1) * (2 * nb + 1) * (2 * nc + 1)
         vectors = np.zeros((nsc, 3), dtype=float)
