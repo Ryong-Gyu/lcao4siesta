@@ -14,8 +14,12 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 def _io_cutoff_radius_from_pao(projector, io):
-    """Return PAO cutoff radius for a DM orbital io, using io->iuo metadata only."""
-    iuo = int(projector.dm_orbital_iuo[io])
+    """Return PAO cutoff radius for an ORB_INDX io via io->iuo metadata."""
+    io_int = int(io)
+    if hasattr(projector, 'io_to_iuo'):
+        iuo = int(projector.io_to_iuo[io_int])
+    else:
+        iuo = int(projector.dm_orbital_iuo[io_int])
     atom_symbol = projector.iuo_to_symbol[iuo]
     target_n = projector.iuo_to_n[iuo]
     target_l = projector.iuo_to_l[iuo]
@@ -30,13 +34,28 @@ def _dm_columns_zero_based(projector):
     - DM/HSX/ORB_INDX orbital ids are treated as Fortran 1-based ids.
     - Conversion to Python indexing is done exactly once here via ``- 1``.
     """
-    dm_cols = projector.dm_listd
+    dm_cols = np.asarray(projector.dm_listd, dtype=np.int64)
 
-    is_one_based = np.all((dm_cols >= 1) & (dm_cols <= projector.dm_nb))
-    if is_one_based:
+    known_io_max = None
+    if hasattr(projector, 'io_to_iuo') and len(projector.io_to_iuo) > 0:
+        known_io_max = max(projector.io_to_iuo.keys())
+
+    # 0-based io indexing
+    if known_io_max is not None and np.all((dm_cols >= 0) & (dm_cols <= known_io_max)):
+        return dm_cols
+
+    # 1-based io indexing (standard SIESTA DM encoding)
+    if known_io_max is not None and np.all((dm_cols >= 1) & (dm_cols <= (known_io_max + 1))):
         return dm_cols - 1
 
-    bad_pos = np.where((dm_cols < 1) | (dm_cols > projector.dm_nb))[0]
+    # Fallback compatibility: unit-cell-only domains.
+    if np.all((dm_cols >= 0) & (dm_cols < projector.dm_nb)):
+        return dm_cols
+    if np.all((dm_cols >= 1) & (dm_cols <= projector.dm_nb)):
+        return dm_cols - 1
+
+    upper_bound = projector.dm_nb if known_io_max is None else (known_io_max + 1)
+    bad_pos = np.where((dm_cols < 1) | (dm_cols > upper_bound))[0]
     first_pos = int(bad_pos[0]) if len(bad_pos) else 0
     bad_value = int(dm_cols[first_pos])
     row = int(np.searchsorted(projector.dm_listdptr, first_pos, side='right') - 1)
@@ -51,7 +70,11 @@ def _dm_columns_zero_based(projector):
 
 
 def _orbital_value_at_position(projector, io, center_io, position_vector, supercell_vectors):
-    iuo = int(projector.dm_orbital_iuo[io])
+    io_int = int(io)
+    if hasattr(projector, 'io_to_iuo'):
+        iuo = int(projector.io_to_iuo[io_int])
+    else:
+        iuo = int(projector.dm_orbital_iuo[io_int])
     atom_symbol = projector.iuo_to_symbol[iuo]
 
     target_n = projector.iuo_to_n[iuo]
@@ -100,30 +123,32 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
     return value
 
 
-def build_active_io_per_mesh(projector, positions, supercell_vectors):
+def build_active_io_per_mesh(projector, positions, io_domain):
     """Build active-io list for each mesh point from io-center and PAO cutoff."""
-    nbasis = projector.dm_nb
+    nio = io_domain.shape[0]
     npoint = positions.shape[0]
-    dm_centers = projector.dm_center_io
 
-    io_cutoff = np.zeros((nbasis), dtype=float)
-    for io in range(nbasis):
-        io_cutoff[io] = _io_cutoff_radius_from_pao(projector, io)
+    io_cutoff = np.zeros((nio), dtype=float)
+    io_centers = np.zeros((nio, 3), dtype=float)
+    for idx in range(nio):
+        io = int(io_domain[idx])
+        io_cutoff[idx] = _io_cutoff_radius_from_pao(projector, io)
+        if hasattr(projector, 'io_to_center_io'):
+            io_centers[idx] = projector.io_to_center_io[io]
+        else:
+            io_centers[idx] = projector.dm_center_io[io]
     io_cutoff2 = io_cutoff * io_cutoff
 
     active_io_per_mesh = []
     for ip in range(npoint):
         position_vector = positions[ip]
         active_io = []
-        for io in range(nbasis):
-            center_io = dm_centers[io]
-            cutoff2 = io_cutoff2[io]
-            is_active = False
-            for vector in supercell_vectors:
-                xji = -(center_io - position_vector + vector)
-                if xji.dot(xji) < cutoff2:
-                    is_active = True
-                    break
+        for idx in range(nio):
+            io = int(io_domain[idx])
+            center_io = io_centers[idx]
+            cutoff2 = io_cutoff2[idx]
+            xji = -(center_io - position_vector)
+            is_active = xji.dot(xji) < cutoff2
             if is_active:
                 active_io.append(io)
         active_io_per_mesh.append(np.array(active_io, dtype=np.int64))
@@ -137,10 +162,14 @@ def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_
     phi_active = np.zeros((nactive), dtype=np.complex128)
     for idx in range(nactive):
         io = int(active_io[idx])
+        if hasattr(projector, 'io_to_center_io'):
+            center_io = projector.io_to_center_io[io]
+        else:
+            center_io = projector.dm_center_io[io]
         phi_active[idx] = _orbital_value_at_position(
             projector,
             io,
-            projector.dm_center_io[io],
+            center_io,
             position_vector,
             supercell_vectors,
         )
@@ -148,26 +177,34 @@ def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_
 
 
 @njit(cache=True)
-def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active, nspin, nbasis):
+def _accumulate_density_from_pairs(
+    dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active, nspin, row_basis_size, io_domain_size
+):
     density_value = np.zeros((nspin), dtype=np.float64)
     if active_io.shape[0] == 0:
         return density_value
 
-    active_mask = np.zeros((nbasis), dtype=np.bool_)
-    active_phi_pos = np.full((nbasis), -1, dtype=np.int64)
+    active_mask = np.zeros((io_domain_size), dtype=np.bool_)
+    active_phi_pos = np.full((io_domain_size), -1, dtype=np.int64)
     for idx in range(active_io.shape[0]):
         io = int(active_io[idx])
+        if io < 0 or io >= io_domain_size:
+            continue
         active_mask[io] = True
         active_phi_pos[io] = idx
 
-    for idx1 in range(active_io.shape[0]):
-        io1 = int(active_io[idx1])
+    for io1 in range(row_basis_size):
+        if not active_mask[io1]:
+            continue
+        idx1 = int(active_phi_pos[io1])
         row_start = dm_listdptr[io1]
         row_end = row_start + dm_numd[io1]
         phi1 = phi_active[idx1]
 
         for ind in range(row_start, row_end):
             io2 = int(dm_columns[ind])
+            if io2 < 0 or io2 >= io_domain_size:
+                continue
             if not active_mask[io2]:
                 continue
             if io1 > io2:
@@ -186,7 +223,7 @@ def _accumulate_density_from_pairs(dm, dm_listdptr, dm_numd, dm_columns, active_
     return density_value
 
 
-def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
+def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size):
     """Accumulate rho from sparse DM, limited to active io pairs only.
 
     Symmetry handling follows rhoofd.F90 upper-triangular accumulation:
@@ -201,6 +238,7 @@ def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active):
         phi_active,
         projector.dm_ns,
         projector.dm_nb,
+        io_domain_size,
     )
 
 
@@ -220,13 +258,17 @@ def electron_density(projector, cell, mesh):
     nc = int(mesh[2])
 
     nspin = projector.dm_ns
+    io_domain_size = projector.dm_nb
+    if hasattr(projector, 'io_all') and len(projector.io_all) > 0:
+        io_domain_size = int(np.max(projector.io_all)) + 1
 
     rho = np.zeros((nspin, na, nb, nc), dtype=float)
     supercell_vectors = projector._supercell_vector_list
 
     positions, grid_indices = build_mesh_positions(xgrid[0], ygrid[0], zgrid[0])
     npoint = positions.shape[0]
-    active_io_per_mesh = build_active_io_per_mesh(projector, positions, supercell_vectors)
+    io_domain = np.unique(np.concatenate((np.arange(projector.dm_nb, dtype=np.int64), dm_columns)))
+    active_io_per_mesh = build_active_io_per_mesh(projector, positions, io_domain)
 
     for ip in range(npoint):
         ix = int(grid_indices[ip, 0])
@@ -236,7 +278,7 @@ def electron_density(projector, cell, mesh):
 
         active_io = active_io_per_mesh[ip]
         phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors)
-        density_value = accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active)
+        density_value = accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size)
         for isp in range(nspin):
             rho[isp][ix][iy][iz] = float(density_value[isp])
 
