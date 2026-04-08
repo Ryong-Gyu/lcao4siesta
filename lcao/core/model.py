@@ -96,6 +96,12 @@ class LcaoProjector:
                 f'{int(self.dm_orbital_io[0])}..{int(self.dm_orbital_io[self.dm_nb - 1])}.'
             )
         self.dm_orbital_iuo = self.orbital_iuo[: self.dm_nb]
+        if not np.array_equal(self.dm_orbital_iuo, self.dm_io_domain):
+            raise ValueError(
+                'DM iuo-domain definition mismatch: expected ORB_INDX unit-cell iuo '
+                f'to be 1..dm_nb (1..{self.dm_nb}), got first/last='
+                f'{int(self.dm_orbital_iuo[0])}..{int(self.dm_orbital_iuo[self.dm_nb - 1])}.'
+            )
         self.species_id_to_label = self._build_species_id_to_label()
 
     def _build_io_metadata_maps(self):
@@ -129,6 +135,11 @@ class LcaoProjector:
             if iuo_int not in canonical_center_by_iuo:
                 raise ValueError(
                     f'ORB_INDX iuo={iuo_int} (referenced by io={io_int}) is missing in unit-cell metadata.'
+                )
+            if io_int <= self.dm_nb and iuo_int != io_int:
+                raise ValueError(
+                    'ORB_INDX unit-cell io->iuo mismatch: '
+                    f'io={io_int} should map to iuo={io_int}, got iuo={iuo_int}.'
                 )
             center_iuo = canonical_center_by_iuo[iuo_int]
             center_io = (
