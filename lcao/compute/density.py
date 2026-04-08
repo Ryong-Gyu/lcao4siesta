@@ -45,7 +45,7 @@ def _dm_columns_zero_based(projector):
     raise ValueError(
         'DM connectivity contains invalid orbital indices for Fortran 1-based '
         'convention. '
-        f'dm_listd[{first_pos}]={bad_value} (row io={row + 1}), basis size={projector.dm_nb}. '
+        f'dm_listd[{first_pos}]={bad_value} (row io={row}), basis size={projector.dm_nb}. '
         f'Likely cause: inconsistent files ({projector._dm_file} vs {projector._system}.ORB_INDX).'
     )
 
@@ -85,7 +85,7 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
             target_l,
             target_z,
             radius,
-            io=io + 1,
+            io=io,
             ia=None,
         )
         # Rnl already applies the orbital cutoff radius explicitly.

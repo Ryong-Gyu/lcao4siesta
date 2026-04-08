@@ -82,7 +82,7 @@ class LcaoProjector:
         self.io_all = self.supercell_orbital_io
         self.iuo_all = self.supercell_orbital_iuo
         self.isc_all = self.supercell_orbital_isc
-        self.dm_io_domain = np.arange(1, self.dm_nb + 1, dtype=int)
+        self.dm_io_domain = np.arange(self.dm_nb, dtype=int)
         if len(self.orbital_io) < self.dm_nb:
             raise ValueError(
                 f'ORB_INDX unit-cell orbital count ({len(self.orbital_io)}) '
@@ -92,14 +92,14 @@ class LcaoProjector:
         if not np.array_equal(self.dm_orbital_io, self.dm_io_domain):
             raise ValueError(
                 'DM io-domain definition mismatch: expected ORB_INDX unit-cell io '
-                f'to be 1..dm_nb (1..{self.dm_nb}), got first/last='
+                f'to be 0..dm_nb-1 (0..{self.dm_nb - 1}), got first/last='
                 f'{int(self.dm_orbital_io[0])}..{int(self.dm_orbital_io[self.dm_nb - 1])}.'
             )
         self.dm_orbital_iuo = self.orbital_iuo[: self.dm_nb]
         if not np.array_equal(self.dm_orbital_iuo, self.dm_io_domain):
             raise ValueError(
                 'DM iuo-domain definition mismatch: expected ORB_INDX unit-cell iuo '
-                f'to be 1..dm_nb (1..{self.dm_nb}), got first/last='
+                f'to be 0..dm_nb-1 (0..{self.dm_nb - 1}), got first/last='
                 f'{int(self.dm_orbital_iuo[0])}..{int(self.dm_orbital_iuo[self.dm_nb - 1])}.'
             )
         self.species_id_to_label = self._build_species_id_to_label()
@@ -136,7 +136,7 @@ class LcaoProjector:
                 raise ValueError(
                     f'ORB_INDX iuo={iuo_int} (referenced by io={io_int}) is missing in unit-cell metadata.'
                 )
-            if io_int <= self.dm_nb and iuo_int != io_int:
+            if io_int < self.dm_nb and iuo_int != io_int:
                 raise ValueError(
                     'ORB_INDX unit-cell io->iuo mismatch: '
                     f'io={io_int} should map to iuo={io_int}, got iuo={iuo_int}.'
@@ -193,7 +193,6 @@ class LcaoProjector:
         mapping = {}
         for io, (ia, species_id, species_label) in enumerate(
             zip(self.atom_index, self.atom_species_index, self.atom_species),
-            start=1,
         ):
             if species_id in mapping and mapping[species_id] != species_label:
                 raise ValueError(
@@ -224,7 +223,7 @@ class LcaoProjector:
             return
 
         first = int(mismatch[0])
-        io = first + 1
+        io = first
         ia = int(self.atom_index[first]) if hasattr(self, 'atom_index') else None
         orb_species_id = int(self.atom_species_index[first])
         hsx_species_id = int(self._hsx_atom_species[first])
@@ -299,7 +298,7 @@ class LcaoProjector:
         ]
         hsx_full_keys = [
             (
-                i + 1,
+                i,
                 int(self._hsx_atom_index[i]),
                 int(self._hsx_orbital_n[i]),
                 int(self._hsx_orbital_l[i]),
@@ -313,7 +312,7 @@ class LcaoProjector:
             (int(self.orbital_io[i]), int(self.atom_index[i]), int(self.orbital_iao[i]))
             for i in range(nrows)
         ]
-        hsx_min_keys = [(i + 1, int(self._hsx_atom_index[i]), int(hsx_iao[i])) for i in range(nrows)]
+        hsx_min_keys = [(i, int(self._hsx_atom_index[i]), int(hsx_iao[i])) for i in range(nrows)]
 
         full_mismatch_indices = [i for i in range(nrows) if orb_full_keys[i] != hsx_full_keys[i]]
         if full_mismatch_indices:
@@ -332,14 +331,14 @@ class LcaoProjector:
             first = mismatch_indices[0]
             first_mismatch = {
                 'index0': int(first),
-                'io': int(first + 1),
+                'io': int(first),
                 'orb_indx': compared_orb[first],
                 'hsx': compared_hsx[first],
             }
         if orb_count != hsx_count and first_mismatch is None:
             first_mismatch = {
                 'index0': int(nrows),
-                'io': int(nrows + 1),
+                'io': int(nrows),
                 'orb_indx': 'missing' if nrows >= orb_count else compared_orb[nrows],
                 'hsx': 'missing' if nrows >= hsx_count else compared_hsx[nrows],
             }
