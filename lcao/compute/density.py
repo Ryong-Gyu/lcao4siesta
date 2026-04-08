@@ -24,10 +24,11 @@ def _io_cutoff_radius_from_pao(projector, io):
 
 
 def _dm_columns_zero_based(projector):
-    """Return sparse-DM column indices normalized to Python 0-based indexing.
+    """Return sparse-DM column indices as Python 0-based indexes.
 
-    SIESTA Fortran files are 1-based, but some Python readers may already convert
-    to 0-based. Accept both conventions, then normalize here.
+    Convention:
+    - DM/HSX/ORB_INDX orbital ids are treated as Fortran 1-based ids.
+    - Conversion to Python indexing is done exactly once here via ``- 1``.
     """
     dm_cols = projector.dm_listd
 
@@ -35,37 +36,15 @@ def _dm_columns_zero_based(projector):
     if is_one_based:
         return dm_cols - 1
 
-    is_zero_based = np.all((dm_cols >= 0) & (dm_cols < projector.dm_nb))
-    if is_zero_based:
-        return dm_cols
-
-    if hasattr(projector, 'supercell_orbital_io') and hasattr(projector, 'supercell_orbital_iuo'):
-        io_map = {
-            int(io): int(iuo) - 1
-            for io, iuo in zip(projector.supercell_orbital_io, projector.supercell_orbital_iuo)
-        }
-
-        can_map_fortran = np.all(dm_cols >= 1) and np.all([int(col) in io_map for col in dm_cols])
-        if can_map_fortran:
-            mapped = np.array([io_map[int(col)] for col in dm_cols], dtype=int)
-            if np.all((mapped >= 0) & (mapped < projector.dm_nb)):
-                return mapped
-
-        can_map_zero = np.all(dm_cols >= 0) and np.all([int(col + 1) in io_map for col in dm_cols])
-        if can_map_zero:
-            mapped = np.array([io_map[int(col + 1)] for col in dm_cols], dtype=int)
-            if np.all((mapped >= 0) & (mapped < projector.dm_nb)):
-                return mapped
-
-    bad_pos = np.where((dm_cols < 0) | (dm_cols > projector.dm_nb))[0]
+    bad_pos = np.where((dm_cols < 1) | (dm_cols > projector.dm_nb))[0]
     first_pos = int(bad_pos[0]) if len(bad_pos) else 0
     bad_value = int(dm_cols[first_pos])
     row = int(np.searchsorted(projector.dm_listdptr, first_pos, side='right') - 1)
     row = max(0, min(row, projector.dm_nb - 1))
 
     raise ValueError(
-        'DM connectivity contains invalid orbital indices after checking both '
-        f'Fortran(1-based) and Python(0-based) conventions: '
+        'DM connectivity contains invalid orbital indices for Fortran 1-based '
+        'convention. '
         f'dm_listd[{first_pos}]={bad_value} (row io={row + 1}), basis size={projector.dm_nb}. '
         f'Likely cause: inconsistent files ({projector._dm_file} vs {projector._system}.ORB_INDX).'
     )
