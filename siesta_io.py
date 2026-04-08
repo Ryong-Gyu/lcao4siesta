@@ -163,6 +163,11 @@ def readORB_INDX(path):
 
     The parser follows the column order produced by ``write_orb_indx.f90``:
     ``io, ia, is, spec, iao, n, l, m, z, ...``.
+
+    Notes
+    -----
+    ``io`` and ``iuo`` are converted to Python 0-based indexing at read time
+    so all downstream internal code can use Python indexing consistently.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f'ORB_INDX file not found: {path}')
@@ -206,7 +211,8 @@ def readORB_INDX(path):
                 continue
 
             try:
-                io_value = int(cols[0])
+                io_value_raw = int(cols[0])
+                io_value = io_value_raw - 1
                 io.append(io_value)
                 ia.append(int(cols[1]))
                 ispec.append(int(cols[2]))
@@ -216,7 +222,8 @@ def readORB_INDX(path):
                 l.append(int(cols[6]))
                 m.append(int(cols[7]))
                 z.append(int(cols[8]))
-                iuo_value = int(cols[-1])
+                iuo_value_raw = int(cols[-1])
+                iuo_value = iuo_value_raw - 1
                 isc_value = [int(cols[-4]), int(cols[-3]), int(cols[-2])]
                 orbital_iuo.append(iuo_value)
                 io_all.append(io_value)
@@ -230,7 +237,7 @@ def readORB_INDX(path):
 
     if n_unit_cell_orbitals is not None:
         io_arr = np.array(io, dtype=int)
-        unit_mask = io_arr <= n_unit_cell_orbitals
+        unit_mask = io_arr < n_unit_cell_orbitals
     else:
         unit_mask = np.ones(len(io), dtype=bool)
 

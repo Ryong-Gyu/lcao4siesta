@@ -44,7 +44,7 @@ def orbital_mask(projector, select):
                             zx[i],
                             zl[i],
                             source='ORB_INDX',
-                            orbital_index=i + 1,
+                            orbital_index=i,
                             file_path=f'{projector._system}.ORB_INDX',
                         )
                         == atom_m
@@ -71,7 +71,7 @@ def orbital_mask(projector, select):
                 zx[idx],
                 zl[idx],
                 source='ORB_INDX',
-                orbital_index=idx + 1,
+                orbital_index=idx,
                 file_path=f'{projector._system}.ORB_INDX',
             )
             m_izz[i] = zz[idx]
