@@ -1,7 +1,6 @@
 import numpy as np
 
 from lcao.compute.kernels import build_mesh_positions
-from lcao.core.model import phi_tolerance
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
 
 try:
@@ -101,7 +100,6 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
     for vector in supercell_vectors:
         xji = -(center_io - position_vector + vector)
         radius = np.sqrt(xji.dot(xji))
-
         phir = projector.Rnl(
             atom_symbol,
             target_n,
@@ -111,7 +109,10 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
             io=io + 1,
             ia=None,
         )
-        if abs(phir) < phi_tolerance:
+        # Rnl already applies the orbital cutoff radius explicitly.
+        # Keep only exact zeros from the cutoff path, without an extra
+        # tolerance-based truncation.
+        if phir == 0.0:
             continue
 
         spherical = projector.Yml(xji, target_m, target_l)
