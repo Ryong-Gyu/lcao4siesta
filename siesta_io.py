@@ -101,6 +101,7 @@ def readDM(fname):
         - listhptr(nao) : Pointer to the start of each row of hamiltonian matrix
         - listh(numh) : Nonzero hamiltonian-matrix element column indexes for each matrix row
         - dm(ndmax, ns)
+
     '''
 
     f = FortranFile(fname)
