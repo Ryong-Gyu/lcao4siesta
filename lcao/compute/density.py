@@ -1,5 +1,6 @@
 import numpy as np
 from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
+from lcao.compute.kernels import build_mesh_positions
 
 try:
     from numba import njit
@@ -121,26 +122,52 @@ def _orbital_value_at_position(projector, io, center_io, position_vector, superc
     return value
 
 
-def active_io_at_position(projector, position_vector, io_domain, supercell_vectors):
-    """Return active io list at one mesh point from io-center and PAO cutoff."""
-    nio = io_domain.shape[0]
-    active_io = []
-    for idx in range(nio):
-        io = int(io_domain[idx])
-        cutoff = _io_cutoff_radius_from_pao(projector, io)
-        cutoff2 = cutoff * cutoff
-        if hasattr(projector, 'io_to_center_io'):
-            center_io = projector.io_to_center_io[io]
-        else:
-            center_io = projector.dm_center_io[io]
+def build_meshphi_active_index(projector, positions, io_domain, supercell_vectors):
+    """Build meshphi-like sparse active-orbital index (endpht/lstpht/listp2)."""
+    npoint = int(positions.shape[0])
+    nio = int(io_domain.shape[0])
+    counts = np.zeros((npoint,), dtype=np.int64)
+    active_per_point = []
 
-        for vector in supercell_vectors:
-            xji = -(center_io - position_vector + vector)
-            if xji.dot(xji) < cutoff2:
-                active_io.append(io)
-                break
+    for ip in range(npoint):
+        position_vector = positions[ip]
+        active_io = []
+        for idx in range(nio):
+            io = int(io_domain[idx])
+            cutoff = _io_cutoff_radius_from_pao(projector, io)
+            cutoff2 = cutoff * cutoff
+            if hasattr(projector, 'io_to_center_io'):
+                center_io = projector.io_to_center_io[io]
+            else:
+                center_io = projector.dm_center_io[io]
 
-    return np.array(active_io, dtype=np.int64)
+            for vector in supercell_vectors:
+                xji = -(center_io - position_vector + vector)
+                if xji.dot(xji) < cutoff2:
+                    active_io.append(io)
+                    break
+        active_array = np.asarray(active_io, dtype=np.int64)
+        active_per_point.append(active_array)
+        counts[ip] = int(active_array.shape[0])
+
+    endpht = np.zeros((npoint + 1,), dtype=np.int64)
+    if npoint > 0:
+        endpht[1:] = np.cumsum(counts)
+
+    nlist = int(endpht[npoint])
+    lstpht = np.zeros((nlist,), dtype=np.int64)
+    listp2 = np.zeros((nlist,), dtype=np.int64)
+
+    for ip in range(npoint):
+        start = int(endpht[ip])
+        stop = int(endpht[ip + 1])
+        nactive = stop - start
+        if nactive <= 0:
+            continue
+        lstpht[start:stop] = active_per_point[ip]
+        listp2[start:stop] = np.arange(start, stop, dtype=np.int64)
+
+    return {'endpht': endpht, 'lstpht': lstpht, 'listp2': listp2}
 
 
 def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors):
@@ -262,20 +289,31 @@ def electron_density(projector, cell, mesh):
     if uses_explicit_supercell_io:
         supercell_vectors = np.zeros((1, 3), dtype=float)
 
-    for ix in range(na):
-        for iy in range(nb):
-            for iz in range(nc):
-                position_vector = np.array(
-                    [xgrid[0, ix, iy, iz], ygrid[0, ix, iy, iz], zgrid[0, ix, iy, iz]],
-                    dtype=float,
-                )
-                active_io = active_io_at_position(projector, position_vector, io_domain, supercell_vectors)
-                phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors)
-                density_value = accumulate_rho_from_sparse_dm(
-                    projector, dm_columns, active_io, phi_active, io_domain_size
-                )
-                for isp in range(nspin):
-                    rho[isp][ix][iy][iz] = float(density_value[isp])
+    positions, grid_indices = build_mesh_positions(xgrid[0], ygrid[0], zgrid[0])
+    meshphi_context = build_meshphi_active_index(projector, positions, io_domain, supercell_vectors)
+    projector.meshphi_active_context = meshphi_context
+    endpht = meshphi_context['endpht']
+    lstpht = meshphi_context['lstpht']
+
+    npoint = int(positions.shape[0])
+    for ip in range(npoint):
+        ix = int(grid_indices[ip, 0])
+        iy = int(grid_indices[ip, 1])
+        iz = int(grid_indices[ip, 2])
+        position_vector = positions[ip]
+        active_count = int(endpht[ip + 1] - endpht[ip])
+        if active_count > 0:
+            imp_start = int(endpht[ip])
+            imp_stop = int(endpht[ip + 1])
+            active_io = lstpht[imp_start:imp_stop]
+        else:
+            active_io = np.zeros((0,), dtype=np.int64)
+        phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors)
+        density_value = accumulate_rho_from_sparse_dm(
+            projector, dm_columns, active_io, phi_active, io_domain_size
+        )
+        for isp in range(nspin):
+            rho[isp][ix][iy][iz] = float(density_value[isp])
 
     projector.rho = rho
     return rho
