@@ -102,7 +102,65 @@ class LcaoProjector:
                 f'to be 0..dm_nb-1 (0..{self.dm_nb - 1}), got first/last='
                 f'{int(self.dm_orbital_iuo[0])}..{int(self.dm_orbital_iuo[self.dm_nb - 1])}.'
             )
+        self._build_orb_indx_basis_maps()
         self.species_id_to_label = self._build_species_id_to_label()
+
+    def _build_orb_indx_basis_maps(self):
+        """Build SIESTA-style basis arrays/maps from ORB_INDX metadata."""
+        self.iaorb = self.atom_index[: self.dm_nb].astype(int)
+        self.iphorb = self.orbital_iao[: self.dm_nb].astype(int)
+        self.indxuo = self.dm_orbital_iuo.astype(int)
+        self.iao2io = {}
+        self.iaorb2io = {}
+        self.iuo2io = {}
+
+        for io, (ia, iao, iuo) in enumerate(zip(self.iaorb, self.iphorb, self.indxuo)):
+            key_iao = (int(ia), int(iao))
+            if key_iao in self.iao2io:
+                raise ValueError(f'Duplicate (ia, iao) key in ORB_INDX metadata: key={key_iao}')
+            self.iao2io[key_iao] = int(io)
+            self.iaorb2io.setdefault(int(ia), []).append(int(io))
+            self.iuo2io[int(iuo)] = int(io)
+
+        n_atom = int(np.max(self.iaorb))
+        self.isa = np.zeros((n_atom,), dtype=int)
+        for ia, ispec in zip(self.atom_index, self.atom_species_index):
+            atom_idx = int(ia) - 1
+            if self.isa[atom_idx] == 0:
+                self.isa[atom_idx] = int(ispec)
+            elif self.isa[atom_idx] != int(ispec):
+                raise ValueError(
+                    'Inconsistent species mapping in ORB_INDX metadata: '
+                    f'ia={int(ia)}, species={int(ispec)}, expected={int(self.isa[atom_idx])}'
+                )
+
+        self.io2iaorb = self.iaorb.astype(int)
+        self.io2iphorb = self.iphorb.astype(int)
+        self.io2indxuo = self.indxuo.astype(int)
+
+        self.io_sc2indxuo = np.asarray(self.iuo_all, dtype=int)
+        self.io_sc2isc = np.asarray(self.isc_all, dtype=int)
+        self.indxuo2io_sc = {}
+        for io_sc, iuo in enumerate(self.io_sc2indxuo):
+            self.indxuo2io_sc.setdefault(int(iuo), []).append(int(io_sc))
+
+    def map_io_to_iaorb(self, io):
+        return int(self.io2iaorb[int(io)])
+
+    def map_io_to_iphorb(self, io):
+        return int(self.io2iphorb[int(io)])
+
+    def map_io_to_indxuo(self, io):
+        return int(self.io2indxuo[int(io)])
+
+    def map_indxuo_to_io(self, indxuo):
+        return int(self.iuo2io[int(indxuo)])
+
+    def map_io_to_isc(self, io):
+        return np.array(self.io_sc2isc[int(io)], dtype=int)
+
+    def map_indxuo_to_io_sc(self, indxuo):
+        return list(self.indxuo2io_sc.get(int(indxuo), []))
 
     def _build_io_metadata_maps(self):
         if not hasattr(self, 'cell') or not hasattr(self, 'atoms'):
