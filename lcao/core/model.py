@@ -153,6 +153,12 @@ class LcaoProjector:
     def map_io_to_indxuo(self, io):
         return int(self.io2indxuo[int(io)])
 
+    def map_io_to_ia(self, io):
+        io_int = int(io)
+        if hasattr(self, 'io_to_ia'):
+            return int(self.io_to_ia[io_int])
+        return self.map_io_to_iaorb(io_int)
+
     def map_indxuo_to_io(self, indxuo):
         return int(self.iuo2io[int(indxuo)])
 
@@ -167,6 +173,7 @@ class LcaoProjector:
             self._readStruct()
 
         canonical_center_by_iuo = {}
+        canonical_ia_by_iuo = {}
         canonical_symbol_by_iuo = {}
         canonical_n_by_iuo = {}
         canonical_l_by_iuo = {}
@@ -177,6 +184,7 @@ class LcaoProjector:
             iuo = int(iuo_value)
             atom_index = int(self.atom_index[idx]) - 1
             canonical_center_by_iuo[iuo] = np.array(self.atoms[atom_index], dtype=float)
+            canonical_ia_by_iuo[iuo] = atom_index + 1
             canonical_symbol_by_iuo[iuo] = self.atom_species[idx]
             canonical_n_by_iuo[iuo] = int(self.orbital_n[idx])
             canonical_l_by_iuo[iuo] = int(self.orbital_l[idx])
@@ -184,8 +192,10 @@ class LcaoProjector:
             canonical_zeta_by_iuo[iuo] = int(self.orbital_zeta[idx])
 
         io_to_iuo = {}
+        io_to_ia = {}
         io_to_isc = {}
         io_to_center = {}
+        ia_isc_to_center = {}
         for io_value, iuo_value, isc_value in zip(self.io_all, self.iuo_all, self.isc_all):
             io_int = int(io_value)
             iuo_int = int(iuo_value)
@@ -199,20 +209,29 @@ class LcaoProjector:
                     'ORB_INDX unit-cell io->iuo mismatch: '
                     f'io={io_int} should map to iuo={io_int}, got iuo={iuo_int}.'
                 )
-            center_iuo = canonical_center_by_iuo[iuo_int]
-            center_io = (
-                center_iuo
-                + float(isc_vec[0]) * self.cell[0]
-                + float(isc_vec[1]) * self.cell[1]
-                + float(isc_vec[2]) * self.cell[2]
-            )
+            ia_int = int(canonical_ia_by_iuo[iuo_int])
+            key_ia_isc = (ia_int, int(isc_vec[0]), int(isc_vec[1]), int(isc_vec[2]))
+            if key_ia_isc in ia_isc_to_center:
+                center_io = ia_isc_to_center[key_ia_isc]
+            else:
+                center_ia = canonical_center_by_iuo[iuo_int]
+                center_io = (
+                    center_ia
+                    + float(isc_vec[0]) * self.cell[0]
+                    + float(isc_vec[1]) * self.cell[1]
+                    + float(isc_vec[2]) * self.cell[2]
+                )
+                ia_isc_to_center[key_ia_isc] = center_io
             io_to_iuo[io_int] = iuo_int
+            io_to_ia[io_int] = ia_int
             io_to_isc[io_int] = isc_vec
             io_to_center[io_int] = center_io
 
         self.io_to_iuo = io_to_iuo
+        self.io_to_ia = io_to_ia
         self.io_to_isc = io_to_isc
         self.io_to_center_io = io_to_center
+        self.ia_isc_to_center = ia_isc_to_center
         self.iuo_to_center = canonical_center_by_iuo
         self.iuo_to_symbol = canonical_symbol_by_iuo
         self.iuo_to_n = canonical_n_by_iuo
