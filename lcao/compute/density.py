@@ -191,6 +191,124 @@ def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_
 
 
 @njit(cache=True)
+def _idx_ijl(ilocal, jlocal):
+    i = ilocal
+    j = jlocal
+    if i > j:
+        i, j = j, i
+    return (j * (j + 1)) // 2 + i
+
+
+def _init_local_dm_cache(io_domain_size, max_active, nspin):
+    ntri = (max_active * (max_active + 1)) // 2
+    return {
+        # Fortran rhoofd.F90 ilocal equivalent: io -> local active index
+        'ilocal': np.full((io_domain_size,), -1, dtype=np.int64),
+        # Fortran rhoofd.F90 iorb equivalent: local active index -> io
+        'iorb': np.full((max_active,), -1, dtype=np.int64),
+        # Fortran rhoofd.F90 Dlocal equivalent: triangular local DM cache
+        'Dlocal': np.full((ntri, nspin), np.nan, dtype=np.float64),
+        # Current active size for iorb/Dlocal view
+        'nactive': 0,
+    }
+
+
+def _build_local_dm_cache(projector, dm_columns, active_io, cache):
+    """Update local triangular DM cache (ilocal/iorb/Dlocal/idx_ijl style).
+
+    Only rows newly required by an active-set update are scanned from sparse DM.
+    Retained active-orbital pairs are copied from the previous cache.
+    """
+    nspin = int(projector.dm_ns)
+    nactive = int(active_io.shape[0])
+    ilocal = cache['ilocal']
+    iorb_prev = cache['iorb'].copy()
+    dlocal_prev = cache['Dlocal'].copy()
+    nactive_prev = int(cache['nactive'])
+
+    ilocal.fill(-1)
+    iorb = cache['iorb']
+    iorb[:nactive] = active_io
+    if nactive < iorb.shape[0]:
+        iorb[nactive:] = -1
+    for idx in range(nactive):
+        io = int(active_io[idx])
+        if 0 <= io < ilocal.shape[0]:
+            ilocal[io] = idx
+
+    dlocal = cache['Dlocal']
+    dlocal.fill(np.nan)
+
+    # Reuse overlapping pairs from previous local cache.
+    ilocal_prev = np.full((ilocal.shape[0],), -1, dtype=np.int64)
+    for idx in range(nactive_prev):
+        io = int(iorb_prev[idx])
+        if 0 <= io < ilocal_prev.shape[0]:
+            ilocal_prev[io] = idx
+    for j in range(nactive):
+        io_j = int(active_io[j])
+        pj = ilocal_prev[io_j] if 0 <= io_j < ilocal_prev.shape[0] else -1
+        if pj < 0:
+            continue
+        for i in range(j + 1):
+            io_i = int(active_io[i])
+            pi = ilocal_prev[io_i] if 0 <= io_i < ilocal_prev.shape[0] else -1
+            if pi < 0:
+                continue
+            idx_new = _idx_ijl(i, j)
+            idx_old = _idx_ijl(pi, pj)
+            for isp in range(nspin):
+                dlocal[idx_new, isp] = dlocal_prev[idx_old, isp]
+
+    # Determine sparse-DM rows needed for missing triangular entries.
+    needed_rows = set()
+    for j in range(nactive):
+        io_j = int(active_io[j])
+        for i in range(j + 1):
+            idx_tri = _idx_ijl(i, j)
+            if not np.isnan(dlocal[idx_tri, 0]):
+                continue
+            io_i = int(active_io[i])
+            row_io = io_i if io_i <= io_j else io_j
+            if 0 <= row_io < projector.dm_nb:
+                needed_rows.add(int(row_io))
+
+    if not needed_rows:
+        cache['nactive'] = nactive
+        return dlocal
+
+    active_mask = np.zeros((ilocal.shape[0],), dtype=np.bool_)
+    for idx in range(nactive):
+        io = int(active_io[idx])
+        if 0 <= io < active_mask.shape[0]:
+            active_mask[io] = True
+
+    for row_io in needed_rows:
+        row_start = int(projector.dm_listdptr[row_io])
+        row_end = row_start + int(projector.dm_numd[row_io])
+        for ind in range(row_start, row_end):
+            col_io = int(dm_columns[ind])
+            if col_io < 0 or col_io >= ilocal.shape[0]:
+                continue
+            if not active_mask[col_io]:
+                continue
+            i_io = row_io if row_io <= col_io else col_io
+            j_io = col_io if row_io <= col_io else row_io
+            li = int(ilocal[i_io])
+            lj = int(ilocal[j_io])
+            if li < 0 or lj < 0:
+                continue
+            idx_tri = _idx_ijl(li, lj)
+            for isp in range(nspin):
+                dlocal[idx_tri, isp] = projector.dm[ind, isp]
+
+    # Ensure uncoupled missing entries are exact zeros.
+    dlocal[np.isnan(dlocal)] = 0.0
+    cache['nactive'] = nactive
+    return dlocal
+
+
+@njit(cache=True)
 def _accumulate_density_from_pairs(
     dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active, nspin, row_basis_size, io_domain_size
 ):
@@ -237,6 +355,25 @@ def _accumulate_density_from_pairs(
     return density_value
 
 
+@njit(cache=True)
+def _accumulate_density_from_dlocal_tri(dlocal, phi_active, nspin):
+    density_value = np.zeros((nspin), dtype=np.float64)
+    nactive = phi_active.shape[0]
+    if nactive == 0:
+        return density_value
+    for j in range(nactive):
+        phi_j = phi_active[j]
+        for i in range(j + 1):
+            phi_i = phi_active[i]
+            idx_tri = _idx_ijl(i, j)
+            pair_product = (phi_i * phi_j).real
+            factor = 1.0 if i == j else 2.0
+            weighted_pair = factor * pair_product
+            for isp in range(nspin):
+                density_value[isp] += dlocal[idx_tri, isp] * weighted_pair
+    return density_value
+
+
 def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size):
     """Accumulate rho from sparse DM, limited to active io pairs only.
 
@@ -254,6 +391,11 @@ def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, 
         projector.dm_nb,
         io_domain_size,
     )
+
+
+def accumulate_rho_from_sparse_dm_cached(projector, dm_columns, active_io, phi_active, local_dm_cache):
+    dlocal = _build_local_dm_cache(projector, dm_columns, active_io, local_dm_cache)
+    return _accumulate_density_from_dlocal_tri(dlocal, phi_active, projector.dm_ns)
 
 
 def electron_density(projector, cell, mesh):
@@ -296,6 +438,8 @@ def electron_density(projector, cell, mesh):
     lstpht = meshphi_context['lstpht']
 
     npoint = int(positions.shape[0])
+    max_active = int(np.max(endpht[1:] - endpht[:-1])) if npoint > 0 else 0
+    local_dm_cache = _init_local_dm_cache(io_domain_size, max_active, nspin)
     for ip in range(npoint):
         ix = int(grid_indices[ip, 0])
         iy = int(grid_indices[ip, 1])
@@ -309,8 +453,8 @@ def electron_density(projector, cell, mesh):
         else:
             active_io = np.zeros((0,), dtype=np.int64)
         phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors)
-        density_value = accumulate_rho_from_sparse_dm(
-            projector, dm_columns, active_io, phi_active, io_domain_size
+        density_value = accumulate_rho_from_sparse_dm_cached(
+            projector, dm_columns, active_io, phi_active, local_dm_cache
         )
         for isp in range(nspin):
             rho[isp][ix][iy][iz] = float(density_value[isp])
