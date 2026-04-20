@@ -544,7 +544,10 @@ class LcaoProjector:
     def Rnl(self, symbol, n, l, zeta, r):
         pao_basis = self.ions[symbol][n][l][zeta]
         radial = np.interp(r, pao_basis['r'], pao_basis['phi'])
-        return radial * (r ** l) * float(r < pao_basis['cutoff'])
+        if r >= cutoff:
+            return 0.0
+        return radial * (r ** l)
+
 
     def Yml(self, vector, m, l):
         x, y, z = vector
