@@ -48,48 +48,6 @@ def _build_species_r2cut_coarse(projector, io_domain):
     return r2cut_species
 
 
-def _dm_columns_zero_based(projector):
-    """Return sparse-DM column indices as Python 0-based indexes.
-
-    Convention:
-    - DM/HSX/ORB_INDX orbital ids are treated as Fortran 1-based ids.
-    - Conversion to Python indexing is done exactly once here via ``- 1``.
-    """
-    dm_cols = np.asarray(projector.dm_listd, dtype=np.int64)
-
-    known_io_max = None
-    if hasattr(projector, 'io_to_iuo') and len(projector.io_to_iuo) > 0:
-        known_io_max = max(projector.io_to_iuo.keys())
-
-    # 0-based io indexing
-    if known_io_max is not None and np.all((dm_cols >= 0) & (dm_cols <= known_io_max)):
-        return dm_cols
-
-    # 1-based io indexing (standard SIESTA DM encoding)
-    if known_io_max is not None and np.all((dm_cols >= 1) & (dm_cols <= (known_io_max + 1))):
-        return dm_cols - 1
-
-    # Fallback compatibility: unit-cell-only domains.
-    if np.all((dm_cols >= 0) & (dm_cols < projector.dm_nb)):
-        return dm_cols
-    if np.all((dm_cols >= 1) & (dm_cols <= projector.dm_nb)):
-        return dm_cols - 1
-
-    upper_bound = projector.dm_nb if known_io_max is None else (known_io_max + 1)
-    bad_pos = np.where((dm_cols < 1) | (dm_cols > upper_bound))[0]
-    first_pos = int(bad_pos[0]) if len(bad_pos) else 0
-    bad_value = int(dm_cols[first_pos])
-    row = int(np.searchsorted(projector.dm_listdptr, first_pos, side='right') - 1)
-    row = max(0, min(row, projector.dm_nb - 1))
-
-    raise ValueError(
-        'DM connectivity contains invalid orbital indices for Fortran 1-based '
-        'convention. '
-        f'dm_listd[{first_pos}]={bad_value} (row io={row}), basis size={projector.dm_nb}. '
-        f'Likely cause: inconsistent files ({projector._dm_file} vs {projector._system}.ORB_INDX).'
-    )
-
-
 def _orbital_value_at_position(
     projector,
     io,
@@ -302,7 +260,7 @@ def electron_density(projector, cell, mesh):
     ``rho(r) = sum_{mu,nu} DM_{mu,nu} * phi_mu(r) * phi_nu(r)``.
     """
     projector.load_context(need_struct_supercell=True, need_orbital_metadata=True)
-    dm_columns = _dm_columns_zero_based(projector)
+    dm_columns = np.asarray(projector.dm_listd, dtype=np.int64)
 
     xgrid, ygrid, zgrid = projector.unit_cell_grid(cell, mesh)
 

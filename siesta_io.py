@@ -129,7 +129,7 @@ def readDM(fname):
 
     for m in range(nb):
         n = numd[m]
-        listd[listdptr[m]:listdptr[m] + n] = f.readInts('i')
+        listd[listdptr[m]:listdptr[m] + n] = f.readInts('i') - 1
 
     for isp in range(ns):
         for m in range(nb):
