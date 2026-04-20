@@ -4,7 +4,6 @@ import warnings
 
 import numpy as np
 import scipy
-from scipy.interpolate import interp1d
 
 from lcao.io import readers
 
@@ -295,22 +294,6 @@ class LcaoProjector:
             stacklevel=2,
         )
 
-    def _normalize_atom_symbol(self, symbol, *, io=None, ia=None):
-        if isinstance(symbol, (int, np.integer)):
-            species_id = int(symbol)
-            if not hasattr(self, 'species_id_to_label'):
-                raise ValueError(
-                    'Species id provided but ORB_INDX species mapping is unavailable '
-                    f'at io={io}, ia={ia}: species id={species_id}'
-                )
-            if species_id not in self.species_id_to_label:
-                raise ValueError(
-                    'Unknown species id in ORB_INDX/HSX metadata at '
-                    f'io={io}, ia={ia}: species id={species_id}'
-                )
-            return self.species_id_to_label[species_id]
-        return symbol
-
     def _validate_orbital_metadata_consistency(self):
         required_orb = (
             'orbital_io',
@@ -558,36 +541,10 @@ class LcaoProjector:
             square += ix ** 2
         return np.sqrt(square)
 
-    def Rnl(self, symbol, n, l, zeta, r, *, io=None, ia=None):
-        if self._length_unit != INTERNAL_LENGTH_UNIT:
-            raise ValueError(
-                f'Unexpected internal length unit state: {self._length_unit}. '
-                f'Expected {INTERNAL_LENGTH_UNIT}.'
-            )
-        atom_symbol = self._normalize_atom_symbol(symbol, io=io, ia=ia)
-        if atom_symbol not in self.ions:
-            raise KeyError(
-                'Missing ion data for orbital metadata at '
-                f'io={io}, ia={ia}: species id/label={symbol}/{atom_symbol}'
-            )
-        pao_basis = self.ions[atom_symbol][n][l][zeta]
-        pao_unit = pao_basis.get('length_unit')
-        if pao_unit is None:
-            raise ValueError(
-                'Missing PAO length unit metadata for orbital table at '
-                f'io={io}, ia={ia}, symbol={atom_symbol}, (n,l,zeta)=({n},{l},{zeta}).'
-            )
-        if str(pao_unit).lower() != INTERNAL_LENGTH_UNIT:
-            raise ValueError(
-                'Length-unit mismatch between projector and PAO table: '
-                f'projector={INTERNAL_LENGTH_UNIT}, pao={pao_unit}, '
-                f'io={io}, ia={ia}, symbol={atom_symbol}, (n,l,zeta)=({n},{l},{zeta}), r={r}.'
-            )
-        cutoff_radius = pao_basis['cutoff']
-        if r < cutoff_radius:
-            f_phi = interp1d(pao_basis['r'], pao_basis['phi'])
-            return f_phi(r) * (r ** l)
-        return 0.0
+    def Rnl(self, symbol, n, l, zeta, r):
+        pao_basis = self.ions[symbol][n][l][zeta]
+        radial = np.interp(r, pao_basis['r'], pao_basis['phi'])
+        return radial * (r ** l) * float(r < pao_basis['cutoff'])
 
     def Yml(self, vector, m, l):
         x, y, z = vector

@@ -247,11 +247,6 @@ def electron_density(projector, cell, mesh):
     ``rho(r) = sum_{mu,nu} DM_{mu,nu} * phi_mu(r) * phi_nu(r)``.
     """
     projector.load_context(need_struct_supercell=True, need_orbital_metadata=True)
-    if not hasattr(projector, 'io_to_center_io'):
-        raise ValueError(
-            'Missing io_to_center_io metadata. Call load_context with '
-            'need_struct_supercell=True and need_orbital_metadata=True first.'
-        )
     io_centers = projector.io_to_center_io
     dm_columns = np.asarray(projector.dm_listd, dtype=np.int64)
 
