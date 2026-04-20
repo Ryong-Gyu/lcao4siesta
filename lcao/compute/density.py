@@ -51,9 +51,8 @@ def _build_species_r2cut_coarse(projector, io_domain):
 def _orbital_value_at_position(
     projector,
     io,
-    center_io,
+    orbital_center,
     position_vector,
-    supercell_vectors,
     r2cut_species,
 ):
     io_int = int(io)
@@ -88,42 +87,39 @@ def _orbital_value_at_position(
     coarse_r2cut = float(r2cut_species.get(atom_symbol, 0.0))
     orbital_cutoff = _io_cutoff_radius_from_pao(projector, io_int)
     orbital_cutoff2 = orbital_cutoff * orbital_cutoff
-    for vector in supercell_vectors:
-        xji = -(center_io - position_vector + vector)
-        r2 = xji.dot(xji)
-        # Stage-1 coarse filter (rhoofd.F90 r2cut-like species gate):
-        # skip expensive per-orbital radial evaluation when the point is
-        # outside the maximum cutoff radius of this species.
-        if r2 >= coarse_r2cut:
-            continue
-        # Stage-2 detailed orbital filter:
-        # preserve exact per-orbital cutoff behavior for numerical fidelity.
-        if r2 >= orbital_cutoff2:
-            continue
+    xji = -(orbital_center - position_vector)
+    r2 = xji.dot(xji)
+    # Stage-1 coarse filter (rhoofd.F90 r2cut-like species gate):
+    # skip expensive per-orbital radial evaluation when the point is
+    # outside the maximum cutoff radius of this species.
+    if r2 >= coarse_r2cut:
+        return value
+    # Stage-2 detailed orbital filter:
+    # preserve exact per-orbital cutoff behavior for numerical fidelity.
+    if r2 >= orbital_cutoff2:
+        return value
 
-        radius = np.sqrt(r2)
-        phir = projector.Rnl(
-            atom_symbol,
-            target_n,
-            target_l,
-            target_z,
-            radius,
-            io=io,
-            ia=None,
-        )
-        # Rnl already applies the orbital cutoff radius explicitly.
-        # Keep only exact zeros from the cutoff path, without an extra
-        # tolerance-based truncation.
-        if phir == 0.0:
-            continue
+    radius = np.sqrt(r2)
+    phir = projector.Rnl(
+        atom_symbol,
+        target_n,
+        target_l,
+        target_z,
+        radius,
+    )
+    # Rnl already applies the orbital cutoff radius explicitly.
+    # Keep only exact zeros from the cutoff path, without an extra
+    # tolerance-based truncation.
+    if phir == 0.0:
+        return value
 
-        spherical = projector.Yml(xji, target_m, target_l)
-        value += phir * spherical
+    spherical = projector.Yml(xji, target_m, target_l)
+    value += phir * spherical
 
     return value
 
 
-def build_meshphi_active_index(projector, positions, io_domain, supercell_vectors):
+def build_meshphi_active_index(projector, positions, io_domain, io_centers):
     """Build meshphi-like sparse active-orbital index (endpht/lstpht)."""
     npoint = int(positions.shape[0])
     nio = int(io_domain.shape[0])
@@ -137,16 +133,11 @@ def build_meshphi_active_index(projector, positions, io_domain, supercell_vector
             io = int(io_domain[idx])
             cutoff = _io_cutoff_radius_from_pao(projector, io)
             cutoff2 = cutoff * cutoff
-            if hasattr(projector, 'io_to_center_io'):
-                center_io = projector.io_to_center_io[io]
-            else:
-                center_io = projector.dm_center_io[io]
+            orbital_center = io_centers[io]
 
-            for vector in supercell_vectors:
-                xji = -(center_io - position_vector + vector)
-                if xji.dot(xji) < cutoff2:
-                    active_io.append(io)
-                    break
+            xji = -(orbital_center - position_vector)
+            if xji.dot(xji) < cutoff2:
+                active_io.append(io)
         active_array = np.asarray(active_io, dtype=np.int64)
         active_per_point.append(active_array)
         counts[ip] = int(active_array.shape[0])
@@ -167,22 +158,18 @@ def build_meshphi_active_index(projector, positions, io_domain, supercell_vector
     return {'endpht': endpht, 'lstpht': lstpht}
 
 
-def evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors):
+def evaluate_phi_for_active_io(projector, active_io, position_vector, io_centers):
     """Evaluate phi(io, ip) only for active io on the current mesh point."""
     nactive = active_io.shape[0]
     phi_active = np.zeros((nactive), dtype=np.complex128)
     for idx in range(nactive):
         io = int(active_io[idx])
-        if hasattr(projector, 'io_to_center_io'):
-            center_io = projector.io_to_center_io[io]
-        else:
-            center_io = projector.dm_center_io[io]
+        orbital_center = io_centers[io]
         phi_active[idx] = _orbital_value_at_position(
             projector,
             io,
-            center_io,
+            orbital_center,
             position_vector,
-            supercell_vectors,
             projector._r2cut_species,
         )
     return phi_active
@@ -260,6 +247,12 @@ def electron_density(projector, cell, mesh):
     ``rho(r) = sum_{mu,nu} DM_{mu,nu} * phi_mu(r) * phi_nu(r)``.
     """
     projector.load_context(need_struct_supercell=True, need_orbital_metadata=True)
+    if not hasattr(projector, 'io_to_center_io'):
+        raise ValueError(
+            'Missing io_to_center_io metadata. Call load_context with '
+            'need_struct_supercell=True and need_orbital_metadata=True first.'
+        )
+    io_centers = projector.io_to_center_io
     dm_columns = np.asarray(projector.dm_listd, dtype=np.int64)
 
     xgrid, ygrid, zgrid = projector.unit_cell_grid(cell, mesh)
@@ -274,21 +267,11 @@ def electron_density(projector, cell, mesh):
         io_domain_size = int(np.max(projector.io_all)) + 1
 
     rho = np.zeros((nspin, na, nb, nc), dtype=float)
-    supercell_vectors = projector._supercell_vector_list
-
     io_domain = np.unique(np.concatenate((np.arange(projector.dm_nb, dtype=np.int64), dm_columns)))
     projector._r2cut_species = _build_species_r2cut_coarse(projector, io_domain)
-    # Representation modes:
-    # - unit-cell io domain: DM connectivity only references 0..dm_nb-1,
-    #   and periodic images are generated by explicit translation summation.
-    # - explicit supercell io domain: DM connectivity includes io>=dm_nb
-    #   already carrying ORB_INDX isc shifts; do not add translation images again.
-    uses_explicit_supercell_io = np.any(io_domain >= projector.dm_nb)
-    if uses_explicit_supercell_io:
-        supercell_vectors = np.zeros((1, 3), dtype=float)
 
     positions, grid_indices = build_mesh_positions(xgrid[0], ygrid[0], zgrid[0])
-    meshphi_context = build_meshphi_active_index(projector, positions, io_domain, supercell_vectors)
+    meshphi_context = build_meshphi_active_index(projector, positions, io_domain, io_centers)
     projector.meshphi_active_context = meshphi_context
     endpht = meshphi_context['endpht']
     lstpht = meshphi_context['lstpht']
@@ -306,7 +289,7 @@ def electron_density(projector, cell, mesh):
             active_io = lstpht[imp_start:imp_stop]
         else:
             active_io = np.zeros((0,), dtype=np.int64)
-        phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, supercell_vectors)
+        phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, io_centers)
         density_value = accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size)
         for isp in range(nspin):
             rho[isp][ix][iy][iz] = float(density_value[isp])
