@@ -89,19 +89,7 @@ class LcaoProjector:
                 f'is smaller than DM basis size ({self.dm_nb}).'
             )
         self.dm_orbital_io = self.orbital_io[: self.dm_nb]
-        if not np.array_equal(self.dm_orbital_io, self.dm_io_domain):
-            raise ValueError(
-                'DM io-domain definition mismatch: expected ORB_INDX unit-cell io '
-                f'to be 0..dm_nb-1 (0..{self.dm_nb - 1}), got first/last='
-                f'{int(self.dm_orbital_io[0])}..{int(self.dm_orbital_io[self.dm_nb - 1])}.'
-            )
         self.dm_orbital_iuo = self.orbital_iuo[: self.dm_nb]
-        if not np.array_equal(self.dm_orbital_iuo, self.dm_io_domain):
-            raise ValueError(
-                'DM iuo-domain definition mismatch: expected ORB_INDX unit-cell iuo '
-                f'to be 0..dm_nb-1 (0..{self.dm_nb - 1}), got first/last='
-                f'{int(self.dm_orbital_iuo[0])}..{int(self.dm_orbital_iuo[self.dm_nb - 1])}.'
-            )
         self._build_orb_indx_basis_maps()
         self.species_id_to_label = self._build_species_id_to_label()
 
@@ -203,11 +191,6 @@ class LcaoProjector:
             if iuo_int not in canonical_center_by_iuo:
                 raise ValueError(
                     f'ORB_INDX iuo={iuo_int} (referenced by io={io_int}) is missing in unit-cell metadata.'
-                )
-            if io_int < self.dm_nb and iuo_int != io_int:
-                raise ValueError(
-                    'ORB_INDX unit-cell io->iuo mismatch: '
-                    f'io={io_int} should map to iuo={io_int}, got iuo={iuo_int}.'
                 )
             ia_int = int(canonical_ia_by_iuo[iuo_int])
             key_ia_isc = (ia_int, int(isc_vec[0]), int(isc_vec[1]), int(isc_vec[2]))
