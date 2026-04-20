@@ -133,9 +133,7 @@ def orbital_projected_local_density_of_state(projector, select, energys, cell, m
                             target_n,
                             target_l,
                             target_z,
-                            r,
-                            io=io1 + 1,
-                            ia=index[io1],
+                            r
                         )
 
                         if phir < phi_tolerance:
