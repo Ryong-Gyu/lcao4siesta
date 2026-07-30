@@ -1,17 +1,33 @@
+from pathlib import Path
+
 import numpy as np
 
 from lcao.io import read_rho, write_rho
-from lcao4siesta import lcao
+from lcao import LcaoProjector
 
-io_cell, io_mesh, io_rho = read_rho("Si.RHO")
 
-model = lcao(
-    system="Si",
-    dm_file="Si.DM",
-    ion_files={"Si": "Si.ion"},
-)
-gen_rho = model.electron_density(io_cell, io_mesh)
-write_rho("OUT.RHO", io_cell, io_mesh, gen_rho)
+def main():
+    case = Path(__file__).resolve().parent
+    cell, mesh, reference = read_rho(case / 'Si.RHO')
+    model = LcaoProjector(
+        system=str(case / 'Si'),
+        dm_file=case / 'Si.DM',
+        ion_files={'Si': case / 'Si.ion'},
+        struct_file=case / 'STRUCT.fdf',
+    )
+    generated = model.electron_density(cell, mesh)
+    write_rho(case / 'OUT.RHO', cell, mesh, generated)
 
-print("mesh", tuple(io_mesh), "shape", io_rho.shape)
-print("max|Δρ|", float(np.max(np.abs(gen_rho[0] - io_rho[0]))))
+    max_error = float(np.max(np.abs(generated - reference)))
+    volume_element = abs(np.linalg.det(cell)) / np.prod(mesh)
+    electron_count = float(generated.sum() * volume_element)
+    print('mesh:', tuple(mesh))
+    print('max |generated - SIESTA|:', max_error)
+    print('integrated electrons:', electron_count)
+
+    if max_error > 3.0e-6:
+        raise RuntimeError('Reconstructed density exceeds the 3e-6 validation tolerance')
+
+
+if __name__ == '__main__':
+    main()

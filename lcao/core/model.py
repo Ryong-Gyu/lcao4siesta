@@ -3,7 +3,7 @@ import os
 import warnings
 
 import numpy as np
-import scipy
+from scipy import special
 
 from lcao.io import readers
 
@@ -16,10 +16,18 @@ INTERNAL_LENGTH_UNIT = 'bohr'
 
 
 class LcaoProjector:
-    def __init__(self, system='Carbon', dm_file=None, ion_files=None, strict_orbital_metadata=True):
+    def __init__(
+        self,
+        system='Carbon',
+        dm_file=None,
+        ion_files=None,
+        strict_orbital_metadata=True,
+        struct_file=None,
+    ):
         self._system = system
         self._dm_file = dm_file if dm_file is not None else self._system + '.DM'
         self._ion_files = ion_files
+        self._struct_file = struct_file
         self._strict_orbital_metadata = strict_orbital_metadata
         self._orbital_metadata_validation = {
             'status': 'not_checked',
@@ -422,7 +430,7 @@ class LcaoProjector:
             self.ions.update({symbol: readers.read_ion(file_name)})
 
     def _readStruct(self):
-        results = readers.read_struct()
+        results = readers.read_struct(self._struct_file)
         self.cell = results[0]
         self.atoms = results[1]
         self.species = results[2]
@@ -543,10 +551,10 @@ class LcaoProjector:
 
     def Rnl(self, symbol, n, l, zeta, r):
         pao_basis = self.ions[symbol][n][l][zeta]
-        radial = np.interp(r, pao_basis['r'], pao_basis['phi'])
+        cutoff = pao_basis['cutoff']
         if r >= cutoff:
             return 0.0
-        return radial * (r ** l)
+        return np.interp(r, pao_basis['r'], pao_basis['phi']) * (r ** l)
 
 
     def Yml(self, vector, m, l):
@@ -564,7 +572,7 @@ class LcaoProjector:
 
         # Keep the same real-harmonic convention as the original implementation:
         #   m>0: sqrt(2)*Re(Y_l^{|m|}), m=0: Re(Y_l^0), m<0: sqrt(2)*Im(Y_l^{|m|})
-        ylm_complex = scipy.special.sph_harm(abs(m), l, theta, phi)
+        ylm_complex = special.sph_harm(abs(m), l, theta, phi)
         if m > 0:
             return np.sqrt(2.0) * ylm_complex.real
         if m < 0:
@@ -572,27 +580,25 @@ class LcaoProjector:
         return ylm_complex.real
 
     def unit_cell_grid(self, cell, mesh):
-        cell = np.array(cell)
+        positions = self.unit_cell_positions(cell, mesh)
+        return tuple(positions[..., axis][None, ...] for axis in range(3))
+
+    def unit_cell_positions(self, cell, mesh):
+        """Return Cartesian positions on SIESTA's periodic real-space mesh."""
+        cell = np.asarray(cell, dtype=float)
         na, nb, nc = int(mesh[0]), int(mesh[1]), int(mesh[2])
+        ia, ib, ic = np.indices((na, nb, nc), dtype=float)
+        return (
+            ia[..., None] * cell[0] / na
+            + ib[..., None] * cell[1] / nb
+            + ic[..., None] * cell[2] / nc
+        )
 
-        # SIESTA real-space mesh is periodic on [0, a), [0, b), [0, c).
-        # Therefore grid increments are cell-vector / mesh-size.
-        ua = cell[0] / na
-        ub = cell[1] / nb
-        uc = cell[2] / nc
+    def electron_density(self, cell, mesh):
+        """Reconstruct electron density from this project's density matrix."""
+        from lcao.compute.density import electron_density
 
-        xgrid = np.zeros((1, na, nb, nc), dtype=float)
-        ygrid = np.zeros((1, na, nb, nc), dtype=float)
-        zgrid = np.zeros((1, na, nb, nc), dtype=float)
-
-        for ia in range(na):
-            for ib in range(nb):
-                for ic in range(nc):
-                    position_vector = ia * ua + ib * ub + ic * uc
-                    xgrid[0, ia, ib, ic] = position_vector[0]
-                    ygrid[0, ia, ib, ic] = position_vector[1]
-                    zgrid[0, ia, ib, ic] = position_vector[2]
-        return xgrid, ygrid, zgrid
+        return electron_density(self, cell, mesh)
 
 
 __all__ = ['LcaoProjector', 'overlap_tolerance', 'phi_tolerance']

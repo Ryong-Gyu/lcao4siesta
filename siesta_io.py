@@ -2,13 +2,12 @@ import glob
 import os
 import struct
 
-from pysiesta.utils.fortranfile import FortranFile
 import numpy as np
 
-from pysiesta.utils import units
+from FortranFile import FortranFile
 
 INTERNAL_LENGTH_UNIT = 'Bohr'
-BOHR_TO_ANG = float(units.bohr2ang)
+BOHR_TO_ANG = 0.529177210903
 ANG_TO_BOHR = 1.0 / BOHR_TO_ANG
 
 
@@ -56,8 +55,7 @@ def readGrid(fname):
     mesh = temp[:3]
     nspin = temp[3]
 
-    maxp = mesh[0] * mesh[1] * mesh[2]
-    rho = np.zeros((2, mesh[0], mesh[1], mesh[2]), dtype = float)
+    rho = np.zeros((nspin, mesh[0], mesh[1], mesh[2]), dtype=float)
 
     for isp in range(nspin):
         for iz in range(mesh[2]):
@@ -142,7 +140,7 @@ def readDM(fname):
 
 def writeDM(fname, nb, ns, numd, listdptr, listd, dm):
 
-    f = fortran.FortranFile(fname, mode = 'wb')
+    f = FortranFile(fname, mode='wb')
     f.writeInts([nb, ns], 'i')
     f.writeInts(numd, 'i')
 
@@ -744,15 +742,19 @@ def readIon(fname):
     return pao_basis
 
 
-def readStruct():
-    struct_file = glob.glob('STRUCT.fdf')[0]
+def readStruct(fname=None):
+    if fname is None:
+        matches = glob.glob('STRUCT.fdf')
+        if not matches:
+            raise FileNotFoundError('STRUCT.fdf was not found in the current directory')
+        fname = matches[0]
 
     CELL = np.zeros((3, 3), dtype=float)
     lattice_constant = None
     lattice_constant_unit = 'ang'
     atomic_coordinates_format = None
 
-    with open(struct_file) as f:
+    with open(fname) as f:
         for i, l in enumerate(f):
             line = l
             word = line.split()

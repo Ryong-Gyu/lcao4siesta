@@ -1,293 +1,258 @@
+import math
+
 import numpy as np
-from lcao.core.orbital_m import normalize_orbital_m, validate_signed_orbital_m
-from lcao.compute.kernels import build_mesh_positions
+
+from lcao.core.orbital_m import normalize_orbital_m
 
 try:
-    from numba import njit
-except ImportError:  # pragma: no cover - optional dependency
+    from numba import njit, prange
+except ImportError:  # pragma: no cover - numba is an optional accelerator
+    prange = range
+
     def njit(*args, **kwargs):
-        def _decorator(func):
-            return func
+        def decorator(function):
+            return function
 
-        return _decorator
-
-
-def _io_cutoff_radius_from_pao(projector, io):
-    """Return PAO cutoff radius for an ORB_INDX io via io->iuo metadata."""
-    io_int = int(io)
-    if hasattr(projector, 'io_to_iuo'):
-        iuo = int(projector.io_to_iuo[io_int])
-    else:
-        iuo = int(projector.dm_orbital_iuo[io_int])
-    atom_symbol = projector.iuo_to_symbol[iuo]
-    target_n = projector.iuo_to_n[iuo]
-    target_l = projector.iuo_to_l[iuo]
-    target_z = projector.iuo_to_zeta[iuo]
-    return projector.ions[atom_symbol][target_n][target_l][target_z]['cutoff']
+        return decorator
 
 
-def _build_species_r2cut_coarse(projector, io_domain):
-    """Build species-level max(cutoff^2) map used as a coarse gate.
+def _density_inputs(projector):
+    """Pack object metadata into arrays suitable for the compiled kernel."""
+    io_count = max(projector.io_to_iuo) + 1
+    centers = np.empty((io_count, 3), dtype=np.float64)
+    unit_orbital = np.empty(io_count, dtype=np.int64)
+    shifts = np.empty((io_count, 3), dtype=np.int64)
 
-    This mirrors rhoofd.F90 `r2cut(is)` intent: a fast species-level rejection
-    before evaluating detailed orbital contributions.
-    """
-    r2cut_species = {}
-    for io in io_domain:
-        io_int = int(io)
-        if hasattr(projector, 'io_to_iuo'):
-            iuo = int(projector.io_to_iuo[io_int])
-        else:
-            iuo = int(projector.dm_orbital_iuo[io_int])
-        atom_symbol = projector.iuo_to_symbol[iuo]
-        cutoff = _io_cutoff_radius_from_pao(projector, io_int)
-        cutoff2 = cutoff * cutoff
-        previous = r2cut_species.get(atom_symbol, 0.0)
-        if cutoff2 > previous:
-            r2cut_species[atom_symbol] = cutoff2
-    return r2cut_species
-
-
-def _orbital_value_at_position(
-    projector,
-    io,
-    orbital_center,
-    position_vector,
-    r2cut_species,
-):
-    io_int = int(io)
-    if hasattr(projector, 'io_to_iuo'):
-        iuo = int(projector.io_to_iuo[io_int])
-    else:
-        iuo = int(projector.dm_orbital_iuo[io_int])
-    atom_symbol = projector.iuo_to_symbol[iuo]
-
-    target_n = projector.iuo_to_n[iuo]
-    target_l = projector.iuo_to_l[iuo]
-    # ORB_INDX magnetic quantum number encoding:
-    # - signed: m in [-l, ..., +l] (use directly)
-    # - legacy: ml in [1, ..., 2l+1] (convert by ml - l - 1)
-    target_m = normalize_orbital_m(
-        projector.iuo_to_m[iuo],
-        target_l,
-        source='ORB_INDX',
-        orbital_index=iuo,
-        file_path=f'{projector._system}.ORB_INDX',
+    basis_size = projector.dm_nb
+    radial_size = max(
+        len(_pao_basis(projector, iuo)['r'])
+        for iuo in range(basis_size)
     )
-    target_z = projector.iuo_to_zeta[iuo]
-    validate_signed_orbital_m(
-        target_m,
-        target_l,
-        source='ORB_INDX',
-        orbital_index=iuo,
-        file_path=f'{projector._system}.ORB_INDX',
-    )
+    radial_r = np.zeros((basis_size, radial_size), dtype=np.float64)
+    radial_phi = np.zeros_like(radial_r)
+    radial_lengths = np.empty(basis_size, dtype=np.int64)
+    angular_l = np.empty(basis_size, dtype=np.int64)
+    angular_m = np.empty(basis_size, dtype=np.int64)
+    cutoff2 = np.empty(io_count, dtype=np.float64)
 
-    value = 0.0 + 0.0j
-    coarse_r2cut = float(r2cut_species.get(atom_symbol, 0.0))
-    orbital_cutoff = _io_cutoff_radius_from_pao(projector, io_int)
-    orbital_cutoff2 = orbital_cutoff * orbital_cutoff
-    xji = -(orbital_center - position_vector)
-    r2 = xji.dot(xji)
-    # Stage-1 coarse filter (rhoofd.F90 r2cut-like species gate):
-    # skip expensive per-orbital radial evaluation when the point is
-    # outside the maximum cutoff radius of this species.
-    if r2 >= coarse_r2cut:
-        return value
-    # Stage-2 detailed orbital filter:
-    # preserve exact per-orbital cutoff behavior for numerical fidelity.
-    if r2 >= orbital_cutoff2:
-        return value
-
-    radius = np.sqrt(r2)
-    phir = projector.Rnl(
-        atom_symbol,
-        target_n,
-        target_l,
-        target_z,
-        radius,
-    )
-    # Rnl already applies the orbital cutoff radius explicitly.
-    # Keep only exact zeros from the cutoff path, without an extra
-    # tolerance-based truncation.
-    if phir == 0.0:
-        return value
-
-    spherical = projector.Yml(xji, target_m, target_l)
-    value += phir * spherical
-
-    return value
-
-
-def build_meshphi_active_index(projector, positions, io_domain, io_centers):
-    """Build meshphi-like sparse active-orbital index (endpht/lstpht)."""
-    npoint = int(positions.shape[0])
-    nio = int(io_domain.shape[0])
-    counts = np.zeros((npoint,), dtype=np.int64)
-    active_per_point = []
-
-    for ip in range(npoint):
-        position_vector = positions[ip]
-        active_io = []
-        for idx in range(nio):
-            io = int(io_domain[idx])
-            cutoff = _io_cutoff_radius_from_pao(projector, io)
-            cutoff2 = cutoff * cutoff
-            orbital_center = io_centers[io]
-
-            xji = -(orbital_center - position_vector)
-            if xji.dot(xji) < cutoff2:
-                active_io.append(io)
-        active_array = np.asarray(active_io, dtype=np.int64)
-        active_per_point.append(active_array)
-        counts[ip] = int(active_array.shape[0])
-
-    endpht = np.zeros((npoint + 1,), dtype=np.int64)
-    if npoint > 0:
-        endpht[1:] = np.cumsum(counts)
-
-    nlist = int(endpht[npoint])
-    lstpht = np.zeros((nlist,), dtype=np.int64)
-    for ip in range(npoint):
-        start = int(endpht[ip])
-        stop = int(endpht[ip + 1])
-        nactive = stop - start
-        if nactive <= 0:
-            continue
-        lstpht[start:stop] = active_per_point[ip]
-    return {'endpht': endpht, 'lstpht': lstpht}
-
-
-def evaluate_phi_for_active_io(projector, active_io, position_vector, io_centers):
-    """Evaluate phi(io, ip) only for active io on the current mesh point."""
-    nactive = active_io.shape[0]
-    phi_active = np.zeros((nactive), dtype=np.complex128)
-    for idx in range(nactive):
-        io = int(active_io[idx])
-        orbital_center = io_centers[io]
-        phi_active[idx] = _orbital_value_at_position(
-            projector,
-            io,
-            orbital_center,
-            position_vector,
-            projector._r2cut_species,
+    for iuo in range(basis_size):
+        l = projector.iuo_to_l[iuo]
+        basis = _pao_basis(projector, iuo)
+        size = len(basis['r'])
+        radial_r[iuo, :size] = basis['r']
+        radial_phi[iuo, :size] = basis['phi']
+        radial_lengths[iuo] = size
+        angular_l[iuo] = l
+        angular_m[iuo] = normalize_orbital_m(
+            projector.iuo_to_m[iuo],
+            l,
+            source='ORB_INDX',
+            orbital_index=iuo,
+            file_path=f'{projector._system}.ORB_INDX',
         )
-    return phi_active
+
+    for io in range(io_count):
+        iuo = projector.io_to_iuo[io]
+        centers[io] = projector.io_to_center_io[io]
+        unit_orbital[io] = iuo
+        shifts[io] = projector.io_to_isc[io]
+        cutoff2[io] = _pao_basis(projector, iuo)['cutoff'] ** 2
+
+    dm_columns = np.asarray(projector.dm_listd, dtype=int)
+    shift_limit = int(np.max(np.abs(shifts[dm_columns])))
+    shift_width = 2 * shift_limit + 1
+    dm_by_shift = np.zeros(
+        (basis_size, basis_size, shift_width, shift_width, shift_width, projector.dm_ns),
+        dtype=np.float64,
+    )
+    for row in range(basis_size):
+        start = projector.dm_listdptr[row]
+        stop = start + projector.dm_numd[row]
+        for index in range(start, stop):
+            column_io = int(projector.dm_listd[index])
+            column = unit_orbital[column_io]
+            sx, sy, sz = shifts[column_io] + shift_limit
+            dm_by_shift[row, column, sx, sy, sz] = projector.dm[index]
+
+    return (
+        centers,
+        cutoff2,
+        unit_orbital,
+        shifts,
+        radial_r,
+        radial_phi,
+        radial_lengths,
+        angular_l,
+        angular_m,
+        dm_by_shift,
+        shift_limit,
+    )
+
+
+def _pao_basis(projector, iuo):
+    """Return the radial table for one unit-cell orbital."""
+    symbol = projector.iuo_to_symbol[iuo]
+    return projector.ions[symbol][projector.iuo_to_n[iuo]][
+        projector.iuo_to_l[iuo]
+    ][projector.iuo_to_zeta[iuo]]
 
 
 @njit(cache=True)
-def _accumulate_density_from_pairs(
-    dm, dm_listdptr, dm_numd, dm_columns, active_io, phi_active, nspin, row_basis_size, io_domain_size
+def _interpolate_radial(radius, grid, values, size):
+    """Linear interpolation matching ``numpy.interp`` on an ion radial table."""
+    if radius <= grid[0]:
+        return values[0]
+    if radius >= grid[size - 1]:
+        return values[size - 1]
+
+    low = 0
+    high = size - 1
+    while high - low > 1:
+        middle = (low + high) // 2
+        if grid[middle] <= radius:
+            low = middle
+        else:
+            high = middle
+
+    fraction = (radius - grid[low]) / (grid[high] - grid[low])
+    return values[low] + fraction * (values[high] - values[low])
+
+
+@njit(cache=True)
+def _real_solid_harmonic(x, y, z, radius, l, m):
+    """Return SIESTA's real ``r**l Y_lm`` convention."""
+    if l == 0:
+        return 1.0 / math.sqrt(4.0 * math.pi)
+    if radius < 1.0e-20:
+        return 0.0
+
+    order = abs(m)
+    cos_theta = z / radius
+    sin_theta = math.sqrt(max(0.0, 1.0 - cos_theta * cos_theta))
+
+    associated = 1.0
+    factor = 1.0
+    for _ in range(order):
+        associated *= -factor * sin_theta
+        factor += 2.0
+
+    if l > order:
+        previous = associated
+        associated = cos_theta * (2 * order + 1) * previous
+        for degree in range(order + 2, l + 1):
+            older = previous
+            previous = associated
+            associated = (
+                (2 * degree - 1) * cos_theta * previous
+                - (degree + order - 1) * older
+            ) / (degree - order)
+
+    factorial_ratio = 1.0
+    for value in range(l - order + 1, l + order + 1):
+        factorial_ratio /= value
+    normalization = math.sqrt((2 * l + 1) * factorial_ratio / (4.0 * math.pi))
+
+    angular = normalization * associated
+    if order:
+        angle = order * math.atan2(y, x)
+        angular *= math.sqrt(2.0) * (math.cos(angle) if m > 0 else math.sin(angle))
+    return radius ** l * angular
+
+
+@njit(cache=True, parallel=True)
+def _density_on_points(
+    positions,
+    centers,
+    cutoff2,
+    unit_orbital,
+    shifts,
+    radial_r,
+    radial_phi,
+    radial_lengths,
+    angular_l,
+    angular_m,
+    dm_by_shift,
+    shift_limit,
 ):
-    density_value = np.zeros((nspin), dtype=np.float64)
-    if active_io.shape[0] == 0:
-        return density_value
+    npoint = positions.shape[0]
+    nio = centers.shape[0]
+    nspin = dm_by_shift.shape[-1]
+    density = np.zeros((nspin, npoint), dtype=np.float64)
 
-    active_mask = np.zeros((io_domain_size), dtype=np.bool_)
-    active_phi_pos = np.full((io_domain_size), -1, dtype=np.int64)
-    for idx in range(active_io.shape[0]):
-        io = int(active_io[idx])
-        if io < 0 or io >= io_domain_size:
-            continue
-        active_mask[io] = True
-        active_phi_pos[io] = idx
+    for point_index in prange(npoint):
+        position = positions[point_index]
+        active_io = np.empty(nio, dtype=np.int64)
+        active_phi = np.empty(nio, dtype=np.float64)
+        active_count = 0
 
-    for io1 in range(row_basis_size):
-        if not active_mask[io1]:
-            continue
-        idx1 = int(active_phi_pos[io1])
-        row_start = dm_listdptr[io1]
-        row_end = row_start + dm_numd[io1]
-        phi1 = phi_active[idx1]
-
-        for ind in range(row_start, row_end):
-            io2 = int(dm_columns[ind])
-            if io2 < 0 or io2 >= io_domain_size:
-                continue
-            if not active_mask[io2]:
-                continue
-            if io1 > io2:
+        for io in range(nio):
+            dx = position[0] - centers[io, 0]
+            dy = position[1] - centers[io, 1]
+            dz = position[2] - centers[io, 2]
+            radius2 = dx * dx + dy * dy + dz * dz
+            if radius2 >= cutoff2[io]:
                 continue
 
-            idx2 = int(active_phi_pos[io2])
-            phi2 = phi_active[idx2]
-            # With real spherical harmonics, phi values are real and the
-            # density contribution uses a plain product.
-            pair_product = (phi1 * phi2).real
-            factor = 1.0 if io1 == io2 else 2.0
-            weighted_pair = factor * pair_product
-            for isp in range(nspin):
-                density_value[isp] += dm[ind, isp] * weighted_pair
+            iuo = unit_orbital[io]
+            radius = math.sqrt(radius2)
+            radial = _interpolate_radial(
+                radius,
+                radial_r[iuo],
+                radial_phi[iuo],
+                radial_lengths[iuo],
+            )
+            solid_harmonic = _real_solid_harmonic(
+                dx,
+                dy,
+                dz,
+                radius,
+                angular_l[iuo],
+                angular_m[iuo],
+            )
+            active_io[active_count] = io
+            active_phi[active_count] = radial * solid_harmonic
+            active_count += 1
 
-    return density_value
+        for left in range(active_count):
+            io1 = active_io[left]
+            iuo1 = unit_orbital[io1]
+            phi1 = active_phi[left]
+            for right in range(left + 1):
+                io2 = active_io[right]
+                sx = shifts[io2, 0] - shifts[io1, 0]
+                sy = shifts[io2, 1] - shifts[io1, 1]
+                sz = shifts[io2, 2] - shifts[io1, 2]
+                if (
+                    abs(sx) > shift_limit
+                    or abs(sy) > shift_limit
+                    or abs(sz) > shift_limit
+                ):
+                    continue
 
-def accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size):
-    """Accumulate rho from sparse DM, limited to active io pairs only.
+                iuo2 = unit_orbital[io2]
+                factor = 1.0 if io1 == io2 else 2.0
+                product = factor * phi1 * active_phi[right]
+                for spin in range(nspin):
+                    density[spin, point_index] += (
+                        dm_by_shift[
+                            iuo1,
+                            iuo2,
+                            sx + shift_limit,
+                            sy + shift_limit,
+                            sz + shift_limit,
+                            spin,
+                        ]
+                        * product
+                    )
 
-    Symmetry handling follows rhoofd.F90 upper-triangular accumulation:
-    keep io1 <= io2 pairs, apply factor 2.0 for off-diagonal terms.
-    """
-    return _accumulate_density_from_pairs(
-        projector.dm,
-        projector.dm_listdptr,
-        projector.dm_numd,
-        dm_columns,
-        active_io,
-        phi_active,
-        projector.dm_ns,
-        projector.dm_nb,
-        io_domain_size,
-    )
+    return density
 
 
 def electron_density(projector, cell, mesh):
-    """Compute real-space electron density from the density matrix.
-
-    The density on each grid point is evaluated as
-    ``rho(r) = sum_{mu,nu} DM_{mu,nu} * phi_mu(r) * phi_nu(r)``.
-    """
+    """Reconstruct the periodic real-space density from a SIESTA DM file."""
     projector.load_context(need_struct_supercell=True, need_orbital_metadata=True)
-    io_centers = projector.io_to_center_io
-    dm_columns = np.asarray(projector.dm_listd, dtype=np.int64)
-
-    xgrid, ygrid, zgrid = projector.unit_cell_grid(cell, mesh)
-
-    na = int(mesh[0])
-    nb = int(mesh[1])
-    nc = int(mesh[2])
-
-    nspin = projector.dm_ns
-    io_domain_size = projector.dm_nb
-    if hasattr(projector, 'io_all') and len(projector.io_all) > 0:
-        io_domain_size = int(np.max(projector.io_all)) + 1
-
-    rho = np.zeros((nspin, na, nb, nc), dtype=float)
-    io_domain = np.unique(np.concatenate((np.arange(projector.dm_nb, dtype=np.int64), dm_columns)))
-    projector._r2cut_species = _build_species_r2cut_coarse(projector, io_domain)
-
-    positions, grid_indices = build_mesh_positions(xgrid[0], ygrid[0], zgrid[0])
-    meshphi_context = build_meshphi_active_index(projector, positions, io_domain, io_centers)
-    projector.meshphi_active_context = meshphi_context
-    endpht = meshphi_context['endpht']
-    lstpht = meshphi_context['lstpht']
-
-    npoint = int(positions.shape[0])
-    for ip in range(npoint):
-        ix = int(grid_indices[ip, 0])
-        iy = int(grid_indices[ip, 1])
-        iz = int(grid_indices[ip, 2])
-        position_vector = positions[ip]
-        active_count = int(endpht[ip + 1] - endpht[ip])
-        if active_count > 0:
-            imp_start = int(endpht[ip])
-            imp_stop = int(endpht[ip + 1])
-            active_io = lstpht[imp_start:imp_stop]
-        else:
-            active_io = np.zeros((0,), dtype=np.int64)
-        phi_active = evaluate_phi_for_active_io(projector, active_io, position_vector, io_centers)
-        density_value = accumulate_rho_from_sparse_dm(projector, dm_columns, active_io, phi_active, io_domain_size)
-        for isp in range(nspin):
-            rho[isp][ix][iy][iz] = float(density_value[isp])
-
+    positions = projector.unit_cell_positions(cell, mesh).reshape((-1, 3))
+    density = _density_on_points(positions, *_density_inputs(projector))
+    rho = density.reshape((projector.dm_ns, *map(int, mesh)))
     projector.rho = rho
     return rho

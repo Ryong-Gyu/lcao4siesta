@@ -19,8 +19,8 @@ def read_orb_indx(path):
     return siesta.readORB_INDX(path)
 
 
-def read_struct():
-    return siesta.readStruct()
+def read_struct(path=None):
+    return siesta.readStruct(path)
 
 
 def read_ion(path):
